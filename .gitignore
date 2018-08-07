@@ -6,3 +6,7 @@ temporary.RData
 outputs
 */.DS_Store
 .DS_Store
+*.png
+.RDataTmp
+*.pdf
+R*.pkg
