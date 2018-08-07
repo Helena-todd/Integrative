@@ -4,11 +4,15 @@
 \alias{plot_aggregate_markers}
 \title{cyto_plot_aggregate_markers}
 \usage{
-plot_aggregate_markers(samp_recip, arrange_by, prettyMarkerNames, pheno_marks,
-  png_name, ff_agg)
+plot_aggregate_markers(patient_names, samp_patients, color_by,
+  prettyMarkerNames, pheno_marks, png_name, ff_agg)
 }
 \arguments{
-\item{samp_recip}{Metadata about the patients}
+\item{patient_names}{Vector containing the names of the patients as ordered in ff_agg}
+
+\item{samp_patients}{Metadata about the patients}
+
+\item{color_by}{string character, name of the column to use to order the fcs files}
 
 \item{prettyMarkerNames}{A vector containing the biological marker names as well as the fluorochrome names}
 

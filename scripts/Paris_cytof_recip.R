@@ -36,8 +36,11 @@ data("samp_recip")
 data("prettyMarkerNames")
 data("pheno_marks")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/ff_agg_recip.RData")
-plot_aggregate_markers(samp_recip, arrange_by = "DATEOFCYTOFEXPERIMENT",
-                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_group_recip_all_marks3.png",
+plot_aggregate_markers(patient_names = recip_names, samp_patients=samp_recip, color_by = "DATEOFCYTOFEXPERIMENT",
+                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_date_recip_all_marks3.png",
+                       ff_agg = ff_agg_recip )
+plot_aggregate_markers(patient_names = recip_names, samp_patients=samp_recip, color_by = "GROUP",
+                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_group_recip_all_marks.png",
                        ff_agg = ff_agg_recip )
 
 
