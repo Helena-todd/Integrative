@@ -4,4 +4,5 @@
 .Ruserdata
 temporary.RData
 outputs
-3/.DS_Store
+*/.DS_Store
+.DS_Store
