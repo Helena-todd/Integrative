@@ -6,5 +6,5 @@
 \alias{BioGVHD-package}
 \title{Title of package}
 \description{
-Title of package
+Description of package
 }

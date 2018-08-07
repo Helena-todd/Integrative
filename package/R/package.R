@@ -1,5 +1,7 @@
 #' Title of package
 #'
+#' Description of package
+#'
 #' @import dplyr
 #' @importFrom purrr %>%
 #'
