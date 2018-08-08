@@ -14,7 +14,7 @@
 #' @examples
 #' pctgs <- generate_pctgs(recip_names, fsom, pdf_name = "my_pdf.pdf", fcs_dir)
 generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir){
-  counts <- matrix(0,
+  pctgs <- matrix(0,
                    length(recip_names),
                    ncol = fsom$FlowSOM$map$nNodes,
                    dimnames = list(recip_names,
@@ -32,10 +32,10 @@ generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir){
     #PlotStars(fsom_tmp,main = name)
 
     counts <- table(GetClusters(fsom_tmp))
-    pctgs <- rep(0, fsom_tmp$map$nNodes)
-    names(pctgs) <- as.character(seq_len(fsom_tmp$map$nNodes))
-    pctgs[names(counts)] <- counts / sum(counts)
-    fsom_tmp$MST$size <- sqrt(pctgs * 500)
+    #pctgs <- rep(0, fsom_tmp$map$nNodes)
+    #names(pctgs) <- as.character(seq_len(fsom_tmp$map$nNodes))
+    pctgs[file,names(counts)] <- counts / sum(counts)
+    fsom_tmp$MST$size <- sqrt(pctgs[file,] * 500)
     PlotStars(fsom_tmp,
               markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD4","CD8a","CD20","IgM","CD38","CD25","CD3","CD11a","CD19"))],
               main = name)
