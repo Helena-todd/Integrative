@@ -2,7 +2,9 @@
 
 export(compute_marker_MFIs_per_metacluster)
 export(fcs_to_agg)
-export(generate_counts)
+export(fsom2fsom_meta)
+export(generate_pctgs)
+export(ggplot_analysis_results)
 export(plot_aggregate_markers)
 import(dplyr)
 importFrom(purrr,"%>%")

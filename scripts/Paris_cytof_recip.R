@@ -1,12 +1,11 @@
 suppressPackageStartupMessages({
   library("openxlsx")
   library("FlowSOM")
+  library("tidyverse")
+  library("magrittr")
+  library("flowCore")
+  library("flowWorkspace")
 })
-suppressPackageStartupMessages(library("FlowSOM"))
-suppressPackageStartupMessages(library("tidyverse"))
-suppressPackageStartupMessages(library("magrittr"))
-suppressPackageStartupMessages(library("flowCore"))
-suppressPackageStartupMessages(library("flowWorkspace"))
 library(BioGVHD)
 options("scipen"=100)
 
@@ -15,13 +14,10 @@ options("scipen"=100)
 ################################################
 
 fcs_dir <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/fcs/"
-fcs_names <- list.files(fcs_dir,
-                        pattern="^2.*fcs$")
+fcs_names <- list.files(fcs_dir, pattern="^2.*fcs$")
 names(fcs_names) <- gsub("^[0-9]*_([^_]*)_.*", "\\1", fcs_names)
-
 recip_names<-fcs_names[grep("R",names(fcs_names))]
-recip_names<- recip_names[-which(names(recip_names)%in%c("12R","18R"))]
-#recip_names<- recip_names[myord]
+recip_names<- recip_names[-which(names(recip_names)%in%c("12R","18R"))] # only CD19+ cells: removed
 
 ff_agg_recip <- fcs_to_agg(fcs_dir= fcs_dir, fcs_names= recip_names, seed = 1, cTotal = 10000*49,
            output_name = "aggregate_recip.fcs")
@@ -32,10 +28,8 @@ prettyMarkerNames[is.na(prettyMarkerNames)] <-
   ff_agg_recip@parameters@data[,"name"][is.na(prettyMarkerNames)]
 names(prettyMarkerNames) <- colnames(ff_agg_recip)
 
-data("samp_recip")
-data("prettyMarkerNames")
-data("pheno_marks")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/ff_agg_recip.RData")
+
 plot_aggregate_markers(patient_names = recip_names, samp_patients=samp_recip, color_by = "DATEOFCYTOFEXPERIMENT",
                        prettyMarkerNames, pheno_marks, png_name= "Aggregate_date_recip_all_marks3.png",
                        ff_agg = ff_agg_recip )
@@ -44,8 +38,6 @@ plot_aggregate_markers(patient_names = recip_names, samp_patients=samp_recip, co
                        ff_agg = ff_agg_recip )
 
 
-load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/ff_agg_recip.RData")
-load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/fsom_recip.RData")
 
 ################## Markers to plot ###################
 ######################################################
@@ -59,10 +51,6 @@ pheno_marks <- pheno_marks[-which(pheno_marks=="CD45")] # all cells are already 
 markersToPlot <- names(prettyMarkerNames)[which(prettyMarkerNames%in%pheno_marks)]
 names(pheno_marks) <- markersToPlot
 colsToUse<-markersToPlot
-
-
-
-
 
 
 ################## PCA directly on MFIs #####################
@@ -79,24 +67,13 @@ patients_mfis<-as.data.frame(patients_mfis)
 rownames(patients_mfis)<-patients_mfis[,1]
 patients_mfis<-patients_mfis[,-1]
 
-pca_mfi <- prcomp(patients_mfis)
-tsne_mfi <- Rtsne(patients_mfis, perplexity = 8)
-samples_mfi <- sample_recip %>% dplyr::mutate(pca_1 = pca_mfi$x[,1],
-                                         pca_2 = pca_mfi$x[,2],
-                                         tsne_1 = tsne_mfi$Y[,1],
-                                         tsne_2 = tsne_mfi$Y[,2])
-
-ggplot(samples_mfi) +
-  geom_point(aes(x = pca_1, y = pca_2, col = as.factor(DATEOFCYTOFEXPERIMENT), shape = GROUP), size = 4) +
-  geom_text(aes(x = pca_1, y = pca_2, label= Id.Cryostem.R)) +
-  theme_minimal() +
-  theme(text = element_text(size = 12))
+ggplot_analysis_results("PCA", data_matrix = patients_mfis, metadata = samp_recip,
+                        col_by = "DATEOFCYTOFEXPERIMENT", shape_by = "GROUP")
 
 
 
 
-
-
+#######################################################
 ##################     FlowSOM      ###################
 #######################################################
 
@@ -121,65 +98,37 @@ save(fsom, file="fsom_recip.RData")
 
 
 
+####################################################################################
+##### generate matrix of counts by matching all patient cells to fSOM clusters #####
+####################################################################################
 
-## matrix of counts with fSOM clusters --------------------------
-
-counts <- generate_counts(recip_names, fsom, pdf_name = "Plot_Stars_recipients_32_marks.pdf", fcs_dir)
-pctgs <- t(apply(counts, 1, function(x){x/sum(x)}))
+pctgs <- generate_pctgs(recip_names[1:5], fsom = fsom_recip, pdf_name = "Plot_Stars_recipients_32_marks.pdf", fcs_dir)
+#pctgs <- t(apply(counts, 1, function(x){x/sum(x)}))
 save(fsom, counts, pctgs, file = "FlowSOM_49recipients.Rdata")
 
+#### Visualising cluster pctgs :
+## PCA/ tSNE on cluster pctgs
 
-## visualising cluster percentages
-library(pheatmap)
-toPlot_2 <- pctgs[,c(24,39)]
-rownames(toPlot_2) <- rownames(sample_recip)
-pheatmap(toPlot_2[myord,] ,
-         annotation_row = sample_recip[,"GROUP", drop = FALSE],
-         cluster_rows = FALSE
-)
+rownames(pctgs_recip) <- names(rownames(pctgs_recip))
+ggplot_analysis_results("PCA", data_matrix = pctgs_recip, metadata = samp_recip,
+                        col_by = "DATEOFCYTOFEXPERIMENT", shape_by = "GROUP")
 
 
 
+####################################################################################
+#######  generate meta_pctgs by matching patient cells to fSOM metaclusters  #######
+####################################################################################
 
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/fsom_recip.RData")
 
+pctgs_meta_recip <- t(apply(pctgs_recip, 1, function(x){tapply(x, fsom_recip$metaclustering, sum)}))
+rownames(pctgs_meta_recip) <- names(rownames(pctgs_meta_recip))
+save(pctgs_meta_recip, file="pctgs_meta_recip.RData")
 
-## PCA/ tSNE on cluster pctgs --------------------------------------
-
-pca <- prcomp(pctgs)
-samp_recip <- sample_recip %>%
-  slice(match(names(recip_names), rownames(sample_recip)))
-samp_bis <- samp_recip %>% dplyr::mutate(pca_1 = pca$x[,1],
-                                                        pca_2 = pca$x[,2])
-ggplot(samp_bis) +
-  geom_point(aes(x = pca_1, y = pca_2, col = as.factor(DATEOFCYTOFEXPERIMENT), shape = GROUP), size = 4) +
-  geom_text(aes(x = pca_1, y = pca_2, label= Id.Cryostem.R)) +
-  theme_minimal() +
-  theme(text = element_text(size = 12))
-
-library(Rtsne)
-tsne<-Rtsne(pctgs,perplexity = 8)
-
-samp_recip <- samp_recip %>% dplyr::mutate(tsne_1 = tsne$Y[,1],
-                                                         tsne_2 = tsne$Y[,2])
-ggplot(samp_recip) +
-  geom_point(aes(x = tsne_1, y = tsne_2, col = as.factor(DATEOFCYTOFEXPERIMENT), shape = GROUP), size = 4) +
-  geom_text(aes(x = tsne_1, y = tsne_2, label= Id.Cryostem.R)) +
-  theme_minimal() +
-  theme(text = element_text(size = 12))
-
-pctgs_meta <- t(apply(pctgs, 1, function(x){tapply(x, fsom$metaclustering, sum)}))
-rownames(pctgs_meta)<-sample_recip$Id.Cryostem.R
-save(pctgs_meta, file="pctgs_meta.RData")
-
-load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/pctgs_meta.RData")
-load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/pctgs_meta_and_metadata.RData")
-
+big_mat <- merge.data.frame(pctgs_meta_recip, samp_recip, by="row.names")
 big_mat[,2:31]<-apply(big_mat[,2:31],2,scale)
 big_mat[,57] <- as.factor(big_mat[,57])
 big_mat[which(big_mat$Id.Cryostem.R=="09R"),"GROUP"] <- "Secondary_tolerant"
-
-#bla <- big_mat %>% arrange(GROUP)
-#rownames(bla) <- bla$Id.Cryostem.R
 
 pheatmap::pheatmap(as.matrix(big_mat[,2:31]),
                    #cluster_rows = hclust_meta, #(ward.D2 from ideas Yvan and Sofie, line 103)
@@ -211,62 +160,38 @@ pheatmap::pheatmap(as.matrix(big_mat[which(big_mat$GROUP != "Non_Tolerant"),2:31
                    main = "Percentages")
 
 
+ggplot_analysis_results("PCA", data_matrix = pctgs_meta_recip, metadata = samp_recip,
+                        col_by = "DATEOFCYTOFEXPERIMENT", shape_by = "GROUP")
+ggplot_analysis_results("tSNE", data_matrix = pctgs_meta_recip, metadata = samp_recip,
+                        col_by = "DATEOFCYTOFEXPERIMENT", shape_by = "GROUP")
 
 
-#colors<-colorRampPalette(rev(brewer.pal(n=7,name="RdYlBu")))(255)
-#pheatmap(my_matrix,cluster_cols = FALSE,cellwidth = 30,fontsize = 7,height = 40,show_rownames = FALSE, col=colors)
 
+#################################################################
+#######  plotStar fsom metaclusters instead of clusters  ########
+#################################################################
 
-spca_meta <- prcomp(pctgs_meta)$x
-rownames(pca_meta) <- names(recip_names)
-samples_ter <- sample_recip %>%
-  #dplyr::arrange(DATEOFCYTOFEXPERIMENT) %>%
-  dplyr::mutate(pca_1_meta = pca_meta[, 1],
-                pca_2_meta = pca_meta[, 2])
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/fsom_recip.RData")
+markersToPlot <- names(prettyMarkerNames)[which(prettyMarkerNames%in%pheno_marks)]
 
-ggplot(samples_ter) +
-  #geom_point(aes(x = pca_1_meta, y = pca_2_meta), size = 4) +
-  geom_point(aes(x = pca_1_meta, y = pca_2_meta, col = as.factor(DATEOFCYTOFEXPERIMENT), shape = GROUP), size = 4) +
-  #geom_text(aes(x = pca_1_meta, y = pca_2_meta, label = seq_along(fcs_names))) +
-  geom_text(aes(x = pca_1_meta, y = pca_2_meta,label=Id.Cryostem.R))+
-  theme_minimal() +
-  theme(text = element_text(size = 12))
+fsom_meta_recip <- fsom2fsom_meta(fsom = fsom_recip, colsToUse = markersToPlot,
+                                  pctgs_patients = pctgs_recip, plot_size = 1)
 
-tsne<-Rtsne(pctgs_meta,perplexity = 8)
-samples_ter <- sample_recip %>% dplyr::mutate(tsne_1 = tsne$Y[,1],
-                                                         tsne_2 = tsne$Y[,2])
-ggplot(samples_ter) +
-  geom_point(aes(x = tsne_1, y = tsne_2, col = as.factor(DATEOFCYTOFEXPERIMENT), shape = GROUP), size = 4) +
-  geom_text(aes(x = tsne_1, y = tsne_2, label= Id.Cryostem.R)) +
-  theme_minimal() +
-  theme(text = element_text(size = 12))
-
-
-## plotStars metaclusters instead of clusters -----------------------
-
-metacluster_MFIs <- t(apply(fsom$FlowSOM$data[, colsToUse], 2, function(x){
-  tapply(x, fsom$metaclustering[fsom$FlowSOM$map$mapping[,1]], median)
-}))
-
-metacluster_pctgs <- t(apply(pctgs, 1, function(x){
-  tapply(x, fsom$metaclustering, sum)
-}))
-
-fsom_test <- fsom
-fsom_test$FlowSOM$map$codes <- t(metacluster_MFIs)
-fsom_test$FlowSOM$map$medianValues <- t(metacluster_MFIs)
-fsom_test$FlowSOM$map$colsUsed <- seq_along(rownames(metacluster_MFIs))
-fsom_test$FlowSOM <- BuildMST(fsom_test$FlowSOM)
-
-# Size depending on 1 file
-fsom_test$FlowSOM$MST$size <- metacluster_pctgs[1,]*100
-# Size equal for all nodes
-fsom_test$FlowSOM$MST$size <- rep(15, ncol(metacluster_MFIs))
-fsom_test$FlowSOM$prettyColnames <- fsom_test$FlowSOM$prettyColnames[fsom$FlowSOM$map$colsUsed]
-
-PlotStars(fsom_test$FlowSOM,
+PlotStars(fsom_meta_recip$FlowSOM,
           markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD4","CD8a","CD20","IgM","CD38","CD25","CD3","CD11a","CD19"))])
-PlotNumbers(fsom_test$FlowSOM)
+PlotNumbers(fsom_meta_recip$FlowSOM)
+
+pdf("Plot_Stars_meta_recipients_9_marks.pdf")
+for (i in 1:nrow(pctgs_recip)){
+  fsom_meta_recip <- fsom2fsom_meta(fsom = fsom_recip, colsToUse = markersToPlot,
+                                    pctgs_patients = pctgs_recip, plot_size = i)
+  print(paste0("Plotting file ", names(rownames(pctgs_recip))[i]))
+  PlotStars(fsom_meta_recip$FlowSOM,
+            markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD4","CD8a","CD20","IgM","CD38","CD25","CD3","CD11a","CD19"))],
+            main = names(rownames(pctgs_recip))[i])
+}
+dev.off()
+
 
 
 
