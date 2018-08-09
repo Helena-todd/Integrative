@@ -4,7 +4,7 @@
 \alias{generate_pctgs}
 \title{generate_pctgs}
 \usage{
-generate_pctgs(recip_names, fsom, pdf_name, fcs_dir)
+generate_pctgs(recip_names, fsom, pdf_name, fcs_dir, output_dir)
 }
 \arguments{
 \item{recip_names}{vector containing the names of recipients' fcs files}

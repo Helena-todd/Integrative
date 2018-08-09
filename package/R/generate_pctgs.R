@@ -13,7 +13,7 @@
 #'
 #' @examples
 #' pctgs <- generate_pctgs(recip_names, fsom, pdf_name = "my_pdf.pdf", fcs_dir)
-generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir){
+generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir){
   pctgs <- matrix(0,
                    length(recip_names),
                    ncol = fsom$FlowSOM$map$nNodes,
@@ -25,9 +25,9 @@ generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir){
     file<-recip_names[[i]]
     message(file)
     ff <- read.FCS(file.path(fcs_dir,file))
-    ff <- flowCore::transform(ff,
-                    transformList(colnames(fsom$FlowSOM$data)[c(3,17,28:62,71)], arcsinhTransform(b=1/5, a=0, c=0)))
-    fsom_tmp <- NewData(fsom$FlowSOM, ff)
+    ff_t <- flowCore::transform(ff,
+                    transformList(colnames(ff)[c(3,17,28:62,71)], arcsinhTransform(b=1/5, a=0, c=0)))
+    fsom_tmp <- NewData(fsom$FlowSOM, ff_t)
     name<-names(recip_names)[i]
     #PlotStars(fsom_tmp,main = name)
 
@@ -46,6 +46,26 @@ generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir){
 
     #t <- table(fsom_tmp$map$mapping[,1])
     #counts[file, names(t)] <- t
+
+    m <- matrix(0, nrow = nrow(ff), ncol = 3, dimnames = list(NULL,
+                                                              c("FlowSOM-clusters",
+                                                                "FlowSOM-metaclusters",
+                                                                "FlowSOM-metaclusters-jittered")))
+    m[, "FlowSOM-clusters"] <- GetClusters(fsom_tmp)
+    m[, "FlowSOM-metaclusters"] <- GetMetaclusters(fsom_tmp, fsom$metaclustering)
+    m[, "FlowSOM-metaclusters-jittered"] <- as.numeric(GetMetaclusters(fsom_tmp, fsom$metaclustering)) +
+      rnorm(nrow(ff), sd = 0.1)
+
+    ff_updated <- flowFrame(exprs = cbind(exprs(ff), m))
+    ff_updated@parameters@data[,"desc"] <- c(ff@parameters@data[,"desc"],
+                                             "FlowSOM-clusters",
+                                             "FlowSOM-metaclusters",
+                                             "FlowSOM-metaclusters-jittered")
+    ff_updated@description <- ff@description
+    #
+    # ff_updated <- cbind2(ff, m)
+
+    write.FCS(ff_updated, file.path(output_dir, file))
   }
   dev.off()
   return(pctgs)
