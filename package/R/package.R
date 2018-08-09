@@ -4,6 +4,7 @@
 #'
 #' @import dplyr
 #' @import FlowSOM
+#' @import ggplot2
 #' @importFrom purrr %>%
 #' @importFrom openxlsx read.xlsx
 #'
