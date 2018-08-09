@@ -9,12 +9,12 @@
 #' @return description of output
 #' @export
 compute_marker_MFIs_per_metacluster <- function( ff_agg, pctgs_meta, fsom, functional_marks){
-  patient_IDs <- as.factor(exprs(ff_agg)[,72])
+  patient_IDs <- as.factor(ff_agg@exprs[,72])
   pctgs_and_MFIs <- pctgs_meta
   metacluster_ids <- FlowSOM::GetMetaclusters(fsom)
   markersToCluster <- names(functional_marks)
   for(i in 1:length(table(fsom$metaclustering))){
-    patient_MFIs <- apply(exprs(ff_agg)[which(metacluster_ids==i),markersToCluster], 2, function(markerValues){
+    patient_MFIs <- apply(ff_agg@exprs[which(metacluster_ids==i),markersToCluster], 2, function(markerValues){
       tapply(markerValues, patient_IDs[which(metacluster_ids==i)] , median)
     })
     colnames(patient_MFIs) <- paste0("meta",i,"_",colnames(patient_MFIs))
