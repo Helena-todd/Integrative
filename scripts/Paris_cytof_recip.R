@@ -102,7 +102,8 @@ save(fsom, file="fsom_recip.RData")
 ##### generate matrix of counts by matching all patient cells to fSOM clusters #####
 ####################################################################################
 
-pctgs <- generate_pctgs(recip_names[1:5], fsom = fsom_recip, pdf_name = "Plot_Stars_recipients_32_marks.pdf", fcs_dir)
+pctgs <- generate_pctgs(recip_names[1], fsom = fsom_recip, pdf_name = "Plot_Stars_recipients_32_marks.pdf", fcs_dir,
+                        output_dir = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/annotated_fcs_files/")
 #pctgs <- t(apply(counts, 1, function(x){x/sum(x)}))
 save(fsom, counts, pctgs, file = "FlowSOM_49recipients.Rdata")
 

@@ -24,15 +24,12 @@ pop_mark <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_3:04
 # extract info of which markers are expressed in which cell types:
 cellTypes <- markers_of_cellTypes(marker_table = pop_mark)
 
-
-
-
-
+# identify cell type for each fsom cluster
 celllabels <- identify_fsom_cellPopulations(fsom = fsom_meta, prettyMarkerNames, cellTypes,
                               pdf_name = "pops_filt_marks_grid.pdf", view="MST")
 
 
-## doesn't work so well -> I set them manually
+## QueryStarPlot doesn't work so well -> I set the labels manually
 PlotStars(fsom_meta$FlowSOM, markers = c("CD11a","CD16","CD27","CD3","CD4","CD45RA","CD8a","HLADR","CD19",
                                          "CD38","CD161","CCR5"))
 
@@ -50,12 +47,8 @@ PlotStars(fsom_meta$FlowSOM,
           backgroundValues = my_labels)
 
 plot.new()
-graphics::legend("center", legend = levels(as.factor(labels)),
+graphics::legend("center", legend = levels(as.factor(my_labels)),
                  fill = rainbow(11, alpha = 0.3), cex = 0.7, ncol = 2, bty = "n")
-
-
-
-
 
 
 
@@ -65,11 +58,10 @@ graphics::legend("center", legend = levels(as.factor(labels)),
 ################################################################################
 
 ## On pctgs_meta only :
-samp_recip <- sample_recip
-rownames(samp_recip) <- sample_recip$Id.Cryostem.R
+
 big_mat <- merge.data.frame(pctgs_meta_recip, samp_recip, by="row.names")
 rownames(big_mat) <- big_mat$Row.names
-dist_mat <- dist(big_mat[,2:30])
+dist_mat <- dist(big_mat[,2:31])
 library(dendextend)
 hclust_meta<-hclust(dist_mat, method = "ward.D2")
 dend <- as.dendrogram(hclust_meta)
@@ -143,21 +135,23 @@ pheatmap(as.matrix(big_mat[,2:241]), annotation_row = annot, cex=.7)
 big_mat[,2:241] <- apply(big_mat[,2:241],2,scale)
 dist_mat <- dist(big_mat[,2:241])
 library(dendextend)
-hclust_meta<-hclust(dist_mat)#, method = "ward")
+hclust_meta<-hclust(dist_mat, method = "ward.D2")
 dend <- as.dendrogram(hclust_meta)
 grop<-rep(1,49)
 grop[which(big_mat$GROUP=="Secondary_tolerant")]<-2
 grop[which(big_mat$GROUP=="Non_Tolerant")]<-3
 labels_colors(dend) <-
-  c("green","blue","red")[sort_levels_values(
+  c("blue","red","green")[sort_levels_values(
     as.numeric(grop)[order.dendrogram(dend)]
   )]
 dend <- set(dend, "labels_cex", 0.7)
 
 plot(dend,
-     main = "Clustering on metadata only",
+     main = "Clustering on fsom metaclusters and functional marker MFIs",
      horiz =  F,  nodePar = list(cex = .007))
 legend("topleft", legend = c("non_tolerant","primary_tol","secondary_tol"), fill = c("red","green","blue"),cex=0.75)
+
+pheatmap(as.matrix(big_mat[,2:241]), cluster_rows = hclust_meta, annotation_row = annot, cex=.7)
 
 
 ## clustering only on metadata :
@@ -169,18 +163,38 @@ for ( i in 1:16){
 
 
 
+####################################
+####### concensus clustering #######
+####################################
 
-### concensus clustering :
 library(ConsensusClusterPlus)
 title=tempdir()
 pdf("concensus_clust.pdf")
 results = ConsensusClusterPlus(t(big_mat[,2:241]),maxK=10,reps=200,pItem=0.8,pFeature=1,
                                title=title,clusterAlg="hc",distance="pearson",seed=1)
-results[[2]][["consensusTree"]]
-dend <- as.dendrogram(results[[2]][["consensusTree"]])
+dev.off()
+
+heatmap_k7 <- results[[7]]$consensusMatrix
+rownames(heatmap_k7) <- rownames(big_mat)
+colnames(heatmap_k7) <- rownames(big_mat)
+pheatmap( heatmap_k7, annotation_row = big_mat[,c(243,244,266)])
+pheatmap( heatmap_k7, annotation_row = big_mat[,c(266:267)])
+
+res_dend <- results[[7]][["consensusTree"]]
+res_dend$labels <- rownames(big_mat)
+dend <- as.dendrogram(res_dend)
+plot(dend,
+     main = "Clustering on fsom metaclusters and functional marker MFIs",
+     horiz =  F,  nodePar = list(cex = .007))
+
+pheatmap(results[[7]]$ml)
 
 
-#### clustering on 3 dimensions at the same time :
+
+#########################################################
+#####  clustering on 3 dimensions at the same time  #####
+#########################################################
+
 ## how do I find the info about my patients afterwards?
 
 library(reshape2)   # for melt(...)
