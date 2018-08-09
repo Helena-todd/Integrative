@@ -33,7 +33,7 @@ ggplot_analysis_results <- function(analysis, perplexity_nb=8, data_matrix, meta
   ggplot(df) +
     geom_point(aes(x = axis_1, y = axis_2,
                    col = as.factor(!!rlang::sym(col_by)),
-                   shape = !!rlang::sym(shape_by)), size = 4) +
+                   shape = as.factor(!!rlang::sym(shape_by))), size = 4) +
     geom_text(aes(x = axis_1, y = axis_2, label= Id.Cryostem.R)) +
     theme_minimal() +
     theme(text = element_text(size = 12))
