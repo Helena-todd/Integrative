@@ -1,11 +1,12 @@
 library(FlowSOM)
 library(dplyr)
 library(pheatmap)
+library(tidyverse)
+library(openxlsx)
 
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/fsom_recip.Rdata")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/fsom_meta.RData")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/ff_agg_recip.RData")
-load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/pctgs_meta_and_metadata.RData")
 
 #####################################################
 #########   find metaclusters cell types   ##########
@@ -20,45 +21,16 @@ pop_mark <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_3:04
   select(-c(CD45, GranzymeB)) # rm CD45: they are all positive (pre-gated by laetitia)
                               # rm granzymeB: functional marker, not phenotypic
 
-# remove columns containing NAs ---------------
-#pop_mark <- pop_mark[ , colSums(is.na(pop_mark)) == 0]
-# replace + and - by high and low in all the table
-dam2 = reshape2::dcast(
-  dplyr::mutate(
-    reshape2::melt(pop_mark,id.var="Markers"),
-    value=plyr::mapvalues(
-      value, c("+","-","High","Low"),c("high","low","high","low"))
-  ),Markers~variable)
-
-## define phenotype of cell types with full table (no NAs)
-# cellTypes <- lapply(seq_along(dam2[,1]), function(i){
-#   x <- dam2[i,]
-#   unlist(x[-1])
-# })
-# names(cellTypes) <- dam2[,1]
-#
-# cellTypes <- lapply(cellTypes, sort)
-
-# define phenotype of cell types with sparse table (NAs ++)
-cellTypes <- lapply(seq_along(dam2[,2]), function(i){
-  dam2[i,which(!is.na(dam2[i,]))[-1]]
-})
-names(cellTypes) <- dam2[,1]
+# extract info of which markers are expressed in which cell types:
+cellTypes <- markers_of_cellTypes(marker_table = pop_mark)
 
 
-## define cell type for each metacluster
-labels <- rep("Unknown", 30)
-#colnames(fsom_meta$FlowSOM$map$medianValues)<-prettyMarkerNames[colnames(fsom_meta$FlowSOM$map$medianValues)]
-colnames(fsom$FlowSOM$map$medianValues)<-prettyMarkerNames[colnames(fsom$FlowSOM$map$medianValues)]
-names(fsom$FlowSOM$prettyColnames) <- fsom$FlowSOM$prettyColnames
-#colnames(fsom$FlowSOM$map$medianValues) <- names(colnames(fsom$FlowSOM$map$medianValues))
-pdf("pops_filt_marks_grid.pdf")
-for(cellType in names(cellTypes)){
-  query_res <- QueryStarPlot(UpdateNodeSize(fsom$FlowSOM, reset = TRUE, maxNodeSize = 12),
-                             query = cellTypes[[cellType]], main = cellType, view="grid")
-  #labels[query_res$selected] <- cellType
-}
-dev.off()
+
+
+
+celllabels <- identify_fsom_cellPopulations(fsom = fsom_meta, prettyMarkerNames, cellTypes,
+                              pdf_name = "pops_filt_marks_grid.pdf", view="MST")
+
 
 ## doesn't work so well -> I set them manually
 PlotStars(fsom_meta$FlowSOM, markers = c("CD11a","CD16","CD27","CD3","CD4","CD45RA","CD8a","HLADR","CD19",
