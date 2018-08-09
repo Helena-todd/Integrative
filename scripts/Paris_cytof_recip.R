@@ -110,7 +110,7 @@ save(fsom, counts, pctgs, file = "FlowSOM_49recipients.Rdata")
 ## PCA/ tSNE on cluster pctgs
 
 rownames(pctgs_recip) <- names(rownames(pctgs_recip))
-ggplot_analysis_results("PCA", data_matrix = pctgs_recip, metadata = samp_recip,
+ggplot_analysis_results("tSNE", data_matrix = pctgs_recip, metadata = samp_recip,
                         col_by = "DATEOFCYTOFEXPERIMENT", shape_by = "GROUP")
 
 
@@ -126,6 +126,7 @@ rownames(pctgs_meta_recip) <- names(rownames(pctgs_meta_recip))
 save(pctgs_meta_recip, file="pctgs_meta_recip.RData")
 
 big_mat <- merge.data.frame(pctgs_meta_recip, samp_recip, by="row.names")
+rownames(big_mat) <- big_mat$Row.names
 big_mat[,2:31]<-apply(big_mat[,2:31],2,scale)
 big_mat[,57] <- as.factor(big_mat[,57])
 big_mat[which(big_mat$Id.Cryostem.R=="09R"),"GROUP"] <- "Secondary_tolerant"
