@@ -31,7 +31,7 @@ names(prettyMarkerNames) <- colnames(ff_agg_recip)
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/ff_agg_recip.RData")
 
 plot_aggregate_markers(patient_names = recip_names, samp_patients=samp_recip, color_by = "DATEOFCYTOFEXPERIMENT",
-                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_date_recip_all_marks3.png",
+                       prettyMarkerNames, functional_marks, png_name= "Aggregate_date_recip_funct.png",
                        ff_agg = ff_agg_recip )
 plot_aggregate_markers(patient_names = recip_names, samp_patients=samp_recip, color_by = "GROUP",
                        prettyMarkerNames, pheno_marks, png_name= "Aggregate_group_recip_all_marks.png",
@@ -93,6 +93,10 @@ PlotStars(UpdateNodeSize(fsom$FlowSOM, maxNodeSize = 8, reset = TRUE),
           markers = c("Ce142Di","Nd144Di","Nd145Di","Nd146Di","Tm169Di","Er170Di","Yb172Di",
                       "Pr141Di","Sm147Di"))
 PlotStars(UpdateNodeSize(fsom$FlowSOM, maxNodeSize = 8, reset = TRUE),
+          markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD11a","CD16","CD27","CD3","CD4","CD45RA","CD8a","HLADR","CD19",
+                                                                           "CD38","CD161","CCR5"))])
+
+PlotStars(UpdateNodeSize(fsom$FlowSOM, maxNodeSize = 8, reset = TRUE),
           markers = c("Gd158Di","Yb174Di","Dy161Di","Eu151Di")) # marqueurs fonctionnels
 save(fsom, file="fsom_recip.RData")
 
@@ -102,8 +106,13 @@ save(fsom, file="fsom_recip.RData")
 ##### generate matrix of counts by matching all patient cells to fSOM clusters #####
 ####################################################################################
 
-pctgs <- generate_pctgs(recip_names[1], fsom = fsom_recip, pdf_name = "Plot_Stars_recipients_32_marks.pdf", fcs_dir,
-                        output_dir = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/annotated_fcs_files/")
+pctgs <- generate_pctgs(
+  recip_names = recip_names,
+  fsom = fsom_recip,
+  pdf_name = "Plot_Stars_recipients_32_marks.pdf",
+  fcs_dir = fcs_dir,
+  output_dir = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/annotated_fcs_files/"
+)
 #pctgs <- t(apply(counts, 1, function(x){x/sum(x)}))
 save(fsom, counts, pctgs, file = "FlowSOM_49recipients.Rdata")
 
@@ -130,14 +139,32 @@ big_mat <- merge.data.frame(pctgs_meta_recip, samp_recip, by="row.names")
 rownames(big_mat) <- big_mat$Row.names
 big_mat[,2:31]<-apply(big_mat[,2:31],2,scale)
 big_mat[,57] <- as.factor(big_mat[,57])
+big_mat[,43] <- as.factor(as.Date(big_mat[,43],format = "%d.%m.%Y"))
 big_mat[which(big_mat$Id.Cryostem.R=="09R"),"GROUP"] <- "Secondary_tolerant"
+
+date_colors <- RColorBrewer::brewer.pal(7, "YlOrRd")
+names(date_colors) <- levels(big_mat[,43])
 
 pheatmap::pheatmap(as.matrix(big_mat[,2:31]),
                    #cluster_rows = hclust_meta, #(ward.D2 from ideas Yvan and Sofie, line 103)
-                   cluster_rows = T,
+                   cluster_rows = F,
                    scale = "none",
                    cluster_cols = T,
-                   annotation_row = big_mat[,c(33,57,43)],
+                   # annotation_row = big_mat[,c(33,57,43)],
+                   # annotation_colors = list(
+                   #   "GROUP"=c("Non_Tolerant"="#e31a1c90",
+                   #           "Primary_tolerant"="#00FF0090",
+                   #           "Secondary_tolerant"="#0000FF90"),
+                   #   "aGVHD" = c("0" = "#bfd3e6",
+                   #               "1" = "#88419d"),
+                   #   "DATEOFCYTOFEXPERIMENT"= date_colors),
+
+                   annotation_row = big_mat[,c(33,57)],
+                   annotation_colors = list("GROUP"=c("Non_Tolerant"="#e31a1c90",
+                                                      "Primary_tolerant"="#00FF0090",
+                                                      "Secondary_tolerant"="#0000FF90"),
+                                            "aGVHD" = c("0" = "#bfd3e6",
+                                                        "1" = "#88419d")),
                    #annotation_col = annot_cols,
                    labels_col = my_labels,
                    #col = colors,
@@ -146,8 +173,10 @@ pheatmap::pheatmap(as.matrix(big_mat[,2:31]),
                    show_colnames = T,
                    main = "Percentages")
 
-#bla <- big_mat %>% arrange(GROUP)
-#rownames(bla) <- bla$Id.Cryostem.R
+cbind(b)
+
+#big_mat <- big_mat %>% arrange(GROUP)
+#rownames(big_mat) <- big_mat$Id.Cryostem.R
 
 pheatmap::pheatmap(as.matrix(big_mat[which(big_mat$GROUP != "Non_Tolerant"),2:31]),
                    cluster_rows = T,
@@ -182,6 +211,13 @@ fsom_meta_recip <- fsom2fsom_meta(fsom = fsom_recip, colsToUse = markersToPlot,
 PlotStars(fsom_meta_recip$FlowSOM,
           markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD4","CD8a","CD20","IgM","CD38","CD25","CD3","CD11a","CD19"))])
 PlotNumbers(fsom_meta_recip$FlowSOM)
+
+fsom_meta_recip$FlowSOM$MST$size <- rep(15, 30)
+PlotStars(fsom_meta_recip$FlowSOM,
+          markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD11a","CD16","CD27","CD3","CD4","CD45RA","CD8a","HLADR","CD19",
+                                         "CD38","CD161","CCR5"))],
+          backgroundValues = my_labels,
+          backgroundColor = c(rainbow(n = 7, alpha = 0.3), "#FFFFFF00"))
 
 pdf("Plot_Stars_meta_recipients_9_marks.pdf")
 for (i in 1:nrow(pctgs_recip)){
