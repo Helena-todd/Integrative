@@ -37,7 +37,11 @@ plot_aggregate_markers <- function(patient_names, samp_patients, color_by, prett
     axis(side=1, at=seq_along(rownames(samp_patients)), labels=samp_patients$Id.Cryostem.R, las=2,cex=0.7)
     points(ff_agg@exprs[,c("File_scattered",marker)],
            pch=".",
-           col = scales::hue_pal()(length(gr_levels))[factor(selected_column[ff_agg@exprs[,"File"]],levels=gr_levels)])
+           col = scales::hue_pal()(length(gr_levels))[factor(selected_column[ff_agg@exprs[,"File"]],
+                                                             levels=gr_levels)])
+    medians <- tapply(ff_agg@exprs[,marker], ff_agg@exprs[,"File"], median)
+    lines(as.numeric(names(medians)), medians, pch = 19)
+
   }
   plot.new()
   legend("center",legend=gr_levels, col=scales::hue_pal()(length(gr_levels)),
