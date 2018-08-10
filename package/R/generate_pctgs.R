@@ -14,29 +14,41 @@
 #' @examples
 #' pctgs <- generate_pctgs(recip_names, fsom, pdf_name = "my_pdf.pdf", fcs_dir)
 generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir){
-  pctgs <- matrix(0,
-                   length(recip_names),
-                   ncol = fsom$FlowSOM$map$nNodes,
-                   dimnames = list(recip_names,
-                                   as.character(1:fsom$FlowSOM$map$nNodes)))
+  pctgs <- matrix(
+    0,
+    length(recip_names),
+    ncol = fsom$FlowSOM$map$nNodes,
+    dimnames = list(
+      recip_names,
+      as.character(1:fsom$FlowSOM$map$nNodes)))
   #i <- 1
   pdf(file = pdf_name)
   for (i in seq_along(recip_names)){
-    file<-recip_names[[i]]
+    file <- recip_names[[i]]
+    file_in<-file.path(fcs_dir, file)
+    file_out<-file.path(output_dir, file)
     message(file)
-    ff <- read.FCS(file.path(fcs_dir,file))
-    ff_t <- flowCore::transform(ff,
-                    transformList(colnames(ff)[c(3,17,28:62,71)], arcsinhTransform(b=1/5, a=0, c=0)))
-    fsom_tmp <- NewData(fsom$FlowSOM, ff_t)
+    ff <- flowCore::read.FCS(file_in)
+    from <- flowCore::colnames(ff)[c(3,17,28:62,71)]
+    tlist <- flowCore::transformList(
+      from = from,
+      tfun = flowCore::arcsinhTransform(b=1/5, a=0, c=0),
+      to = from
+    )
+    ff_t <- flowCore::transform(
+      ff,
+      tlist
+    )
+    fsom_tmp <- FlowSOM::NewData(fsom$FlowSOM, ff_t)
     name<-names(recip_names)[i]
     #PlotStars(fsom_tmp,main = name)
 
-    counts <- table(GetClusters(fsom_tmp))
+    counts <- table(FlowSOM::GetClusters(fsom_tmp))
     #pctgs <- rep(0, fsom_tmp$map$nNodes)
     #names(pctgs) <- as.character(seq_len(fsom_tmp$map$nNodes))
     pctgs[file,names(counts)] <- counts / sum(counts)
     fsom_tmp$MST$size <- sqrt(pctgs[file,] * 500)
-    PlotStars(fsom_tmp,
+    FlowSOM::PlotStars(fsom_tmp,
               markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD4","CD8a","CD20","IgM","CD38","CD25","CD3","CD11a","CD19"))],
               main = name)
 
@@ -51,12 +63,12 @@ generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir){
                                                               c("FlowSOM-clusters",
                                                                 "FlowSOM-metaclusters",
                                                                 "FlowSOM-metaclusters-jittered")))
-    m[, "FlowSOM-clusters"] <- GetClusters(fsom_tmp)
-    m[, "FlowSOM-metaclusters"] <- GetMetaclusters(fsom_tmp, fsom$metaclustering)
-    m[, "FlowSOM-metaclusters-jittered"] <- as.numeric(GetMetaclusters(fsom_tmp, fsom$metaclustering)) +
+    m[, "FlowSOM-clusters"] <- FlowSOM::GetClusters(fsom_tmp)
+    m[, "FlowSOM-metaclusters"] <- FlowSOM::GetMetaclusters(fsom_tmp, fsom$metaclustering)
+    m[, "FlowSOM-metaclusters-jittered"] <- as.numeric(FlowSOM::GetMetaclusters(fsom_tmp, fsom$metaclustering)) +
       rnorm(nrow(ff), sd = 0.1)
 
-    ff_updated <- flowFrame(exprs = cbind(exprs(ff), m))
+    ff_updated <- flowCore::flowFrame(exprs = cbind(flowCore::exprs(ff), m))
     ff_updated@parameters@data[,"desc"] <- c(ff@parameters@data[,"desc"],
                                              "FlowSOM-clusters",
                                              "FlowSOM-metaclusters",
@@ -65,7 +77,7 @@ generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir){
     #
     # ff_updated <- cbind2(ff, m)
 
-    write.FCS(ff_updated, file.path(output_dir, file))
+    flowCore::write.FCS(ff_updated, file_out)
   }
   dev.off()
   return(pctgs)
