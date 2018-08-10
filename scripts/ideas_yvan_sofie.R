@@ -7,6 +7,7 @@ library(openxlsx)
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/fsom_recip.Rdata")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/fsom_meta.RData")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/ff_agg_recip.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/pctgs_and_MFIs.RData")
 
 #####################################################
 #########   find metaclusters cell types   ##########
@@ -44,7 +45,8 @@ my_labels2 <- c("NK?","mDC?","Monocytes","CD25","B memory?","B naive","B naive",
 
 PlotStars(fsom_meta$FlowSOM,
           markers=c("CD11a","CD16","CD27","CD3","CD4","CD45RA","CD8a","HLADR","CD19","CD38","CD161","CCR5"),
-          backgroundValues = my_labels)
+          backgroundValues = my_labels,
+          backgroundColor = c(rainbow(n = 7, alpha = 0.2), "#FFFFFF00"))
 
 plot.new()
 graphics::legend("center", legend = levels(as.factor(my_labels)),
@@ -130,9 +132,10 @@ big_mat <- dplyr::select(big_mat,which(colSums(is.na(big_mat))==0))
 pheatmap(big_mat[,2:241])
 annot = as.data.frame(big_mat$GROUP)
 rownames(annot) <- rownames(big_mat)
-pheatmap(as.matrix(big_mat[,2:241]), annotation_row = annot, cex=.7)
+pheatmap::pheatmap(as.matrix(big_mat[,2:241]), annotation_row = annot, cex=.7)
 
-big_mat[,2:241] <- apply(big_mat[,2:241],2,scale)
+big_mat[,2:241] <- apply(big_mat[,2:241],2,scale) # scale matrix
+big_mat[,2:31] <- big_mat[,2:31 * length(functional_marks)] # rebalance weights so that weights pctgs = weights MFIs
 dist_mat <- dist(big_mat[,2:241])
 library(dendextend)
 hclust_meta<-hclust(dist_mat, method = "ward.D2")
@@ -151,7 +154,11 @@ plot(dend,
      horiz =  F,  nodePar = list(cex = .007))
 legend("topleft", legend = c("non_tolerant","primary_tol","secondary_tol"), fill = c("red","green","blue"),cex=0.75)
 
-pheatmap(as.matrix(big_mat[,2:241]), cluster_rows = hclust_meta, annotation_row = annot, cex=.7)
+pheatmap::pheatmap(as.matrix(big_mat[,2:241]), cluster_rows = hclust_meta, annotation_row = annot, cex=.7)
+pheatmap::pheatmap(as.matrix(big_mat[,2:241]),
+                   cluster_rows = hclust_meta,
+                   annotation_row = big_mat[,c("GROUP","DATEOFCYTOFEXPERIMENT")],
+                   cex=.7)
 
 
 ## clustering only on metadata :
@@ -170,15 +177,23 @@ for ( i in 1:16){
 library(ConsensusClusterPlus)
 title=tempdir()
 pdf("concensus_clust.pdf")
+set.seed(seed = 1)
 results = ConsensusClusterPlus(t(big_mat[,2:241]),maxK=10,reps=200,pItem=0.8,pFeature=1,
                                title=title,clusterAlg="hc",distance="pearson",seed=1)
 dev.off()
+save(results, file = "results_consensus_clustering.RData")
+
+# load consensus clustering results :
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/results_consensus_clustering.RData")
 
 heatmap_k7 <- results[[7]]$consensusMatrix
 rownames(heatmap_k7) <- rownames(big_mat)
 colnames(heatmap_k7) <- rownames(big_mat)
-pheatmap( heatmap_k7, annotation_row = big_mat[,c(243,244,266)])
-pheatmap( heatmap_k7, annotation_row = big_mat[,c(266:267)])
+pheatmap::pheatmap( heatmap_k7, annotation_row = big_mat[,c(243,244,266)],
+                    fontsize_row = 5, fontsize_col = 5)
+pheatmap::pheatmap( heatmap_k7, annotation_row = big_mat[,c(252,243)],
+                    fontsize_row = 5, fontsize_col = 5)
+pheatmap::pheatmap( heatmap_k7, annotation_row = big_mat[,c(266:267)])
 
 res_dend <- results[[7]][["consensusTree"]]
 res_dend$labels <- rownames(big_mat)
