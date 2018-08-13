@@ -17,6 +17,7 @@ compute_marker_MFIs_per_metacluster <- function( ff_agg, pctgs_meta, fsom, funct
     patient_MFIs <- apply(ff_agg@exprs[which(metacluster_ids==i),markersToCluster], 2, function(markerValues){
       tapply(markerValues, patient_IDs[which(metacluster_ids==i)] , median)
     })
+    colnames(patient_MFIs) <- as.character(prettyMarkerNames[which(names(prettyMarkerNames)%in%colnames(patient_MFIs))])
     colnames(patient_MFIs) <- paste0("meta",i,"_",colnames(patient_MFIs))
     pctgs_and_MFIs<-cbind(pctgs_and_MFIs, patient_MFIs)
   }
