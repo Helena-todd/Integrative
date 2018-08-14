@@ -3,6 +3,7 @@
 export(compute_marker_MFIs_per_metacluster)
 export(extract_info_metabo)
 export(fcs_to_agg)
+export(find_subpatways_driving_PC)
 export(fsom2fsom_meta)
 export(generate_pctgs)
 export(ggplot_analysis_results)
