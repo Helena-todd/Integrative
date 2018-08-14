@@ -309,9 +309,11 @@ dev.off()
 
 
 
+###############################################################################
+####### BOXPLOTS of marker expressions in different groups of patients ########
+###############################################################################
 
-## comparing marker expressions in clusters tSNE ----------------------
-
+## between tSNE clusters:
 apart<- c("R690","R830","R219","R598","R2798","R836","R2589","03R","R419","R395","R212")
 #apart<- c("R1152","R2618","R2794","R709","R1131","R1267","R997","R773","09R","R874","R370","R297")
 colnames(patients_mfis) <- as.character(prettyMarkerNames[colnames(patients_mfis)])
@@ -320,17 +322,27 @@ mark<-"CD45"
 patients_mfis$clustered<- rep("other", dim(patients_mfis)[1])
 patients_mfis$clustered[which(rownames(patients_mfis)%in%apart)]<- "clustered"
 
+## between tolerant 1 and tolerant 2:
+mfis_tol <- mfis %>% # remove non tolerant patients
+  filter(!patients %in% samp_recip$Id.Cryostem.R[which(samp_recip$GROUP=="Non_Tolerant")])
+colnames(mfis_tol)[-which(colnames(mfis_tol)=="patients")] <-
+  as.character(prettyMarkerNames[which(names(prettyMarkerNames)%in%colnames(mfis_tol)[-which(colnames(mfis_tol)=="patients")])])
 
-png("boxplots.png",
+mfis_tol$clustered <- rep("Tolerant_1", nrow(mfis_tol))
+tol_2 <- samp_recip$Id.Cryostem.R[which(samp_recip$GROUP=="Secondary_tolerant")]
+mfis_tol$clustered[which(mfis_tol$patients%in%tol_2)]<- "Tolerant_2"
+
+mat2plot <- mfis_tol
+png("boxplots_tol1_tol2.png",
     width = 4000,
     height = 2000)
 par(cex.lab = 2.5, mar = c(4.1,5.1,2.1,2.1))
 layout(matrix(1:30, nrow=5, byrow = TRUE))
-lapply(seq_along(colnames(patients_mfis)[-27]), function(i){
-  boxplot(patients_mfis[,i]~clustered, data=patients_mfis,
-          main=colnames(patients_mfis)[i], xaxt="n", cex.main=4,
-          cex.axis=3, cex.sub=3, col=c("lightgreen","gray"))
-  axis(side=1, at=c(1:2), labels=c("clustered","other"), las=2,cex=1)
+lapply(seq_along(colnames(mat2plot)[-c(ncol(mat2plot),ncol(mat2plot)-1)]), function(i){
+  boxplot(mat2plot[,i]~clustered, data=mat2plot,
+          main=colnames(mat2plot)[i], xaxt="n", cex.main=4,
+          cex.axis=3, cex.sub=3, col=c("lightgreen","blue"))
+  axis(side=1, at=c(1:2), labels=c("Tolerant_1","Tolerant_2"), las=2,cex=1)
 })
 dev.off()
 

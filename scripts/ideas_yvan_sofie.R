@@ -3,6 +3,7 @@ library(dplyr)
 library(pheatmap)
 library(tidyverse)
 library(openxlsx)
+library(BioGVHD)
 
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/fsom_recip.Rdata")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/fsom_meta.RData")
@@ -147,12 +148,19 @@ labels_colors(dend) <-
   c("blue","red","green")[sort_levels_values(
     as.numeric(grop)[order.dendrogram(dend)]
   )]
+# labels_colors(dend) <-
+#      rainbow(7)[sort_levels_values(
+#      as.numeric(as.factor(big_mat$DATEOFCYTOFEXPERIMENT))[order.dendrogram(dend)]
+# )]
 dend <- set(dend, "labels_cex", 0.7)
 
 plot(dend,
      main = "Clustering on fsom metaclusters and functional marker MFIs",
      horiz =  F,  nodePar = list(cex = .007))
 legend("topleft", legend = c("non_tolerant","primary_tol","secondary_tol"), fill = c("red","green","blue"),cex=0.75)
+# legend("topleft", legend = names(table(as.factor(big_mat$DATEOFCYTOFEXPERIMENT))),
+#        fill = c("blue","greenyellow","seagreen1","magenta","red","gold","dodgerblue"),cex=0.5)
+
 
 pheatmap::pheatmap(as.matrix(big_mat[,2:241]), cluster_rows = hclust_meta, annotation_row = annot, cex=.7)
 pheatmap::pheatmap(as.matrix(big_mat[,2:241]),
@@ -167,6 +175,42 @@ bla <- filtered_metadata
 for ( i in 1:16){
   bla[,i] <- as.numeric(as.factor((bla[,i])))
 }
+
+
+###################################
+#########  VOLCANO PLOT  ##########
+###################################
+
+mat2plot <- big_mat %>%
+  filter(!GROUP == "Non_Tolerant")
+mat2use <- mat2plot[,1:241]
+mat2use[,1] <- mat2plot$GROUP
+colnames(mat2use)[1] <- "GROUP"
+res <- metabolomics::TwoGroup(mat2use)
+mat_res <- na.omit(res$output)
+metabolomics::VolcanoPlot(mat_res[,4], mat_res[,2], cexlab = 0.6)
+
+of_interest <- which((mat_res[,4]>1)|(mat_res[,4]<(-1))|(mat_res[,2]<0.05))
+cols_of_interest <- which(colnames(mat2use) %in% names(of_interest))
+
+
+###################################
+###########  BOXPLOTS  ############
+###################################
+
+png("boxplots_tol1_tol2_pctgs_MFIs_of_interest.png",
+    width = 4000,
+    height = 2000)
+par(cex.lab = 2.5, mar = c(4.1,5.1,2.1,2.1))
+layout(matrix(1:10, nrow=5, byrow = TRUE))
+lapply(cols_of_interest, function(i){
+  print(i)
+  boxplot(mat2use[,i]~GROUP, data=mat2use,
+          main=colnames(mat2use)[i], xaxt="n", cex.main=4,
+          cex.axis=3, cex.sub=3, col=c("lightgreen","blue"))
+  axis(side=1, at=c(1:2), labels=c("Tolerant_1","Tolerant_2"), las=2,cex=1)
+})
+dev.off()
 
 
 
