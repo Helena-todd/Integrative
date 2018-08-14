@@ -1,33 +1,18 @@
 library(dplyr)
 library(openxlsx)
 library(metabolomics)
+library(BioGVHD)
 
 
 #################################
 ########  PREPROCESSING  ########
 #################################
 
-# args = file containing metadata info for patients of interest, with metabo names as rownames
-#      = and metabo.xlsx file
-# output = matrix where metabo and metadat info is merged
-merge_metabo_metadata <- function(metadata_file, metabo_file){
-  load(metadata_file)
-  recip_meta <- sample_subset[which(!is.na(sample_subset$METABONAME)),]
-  rownames(recip_meta) <- sample_subset$METABONAME[which(!is.na(sample_subset$METABONAME))]
-  
-  ## strange numbers after row 390, I only read 80 first rows (corresponding to patients)
-  metabo<- read.xlsx(metabo_file, rows = c(1:82), colNames = F, rowNames = T)
-  meta_metabo <- metabo[1:3,]  
-  data_metabolites <- metabo[which(rownames(metabo)%in%rownames(recip_meta)),]
-  colnames(data_metabolites) <- metabo[which(rownames(metabo)=="metabolite"),] 
-  return(list(subset_meta=recip_meta, data_metabolites= data_metabolites, meta_metabo=meta_metabo))
-}
-
-merged <- merge_metabo_metadata(metadata_file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/sample_recip.RData",
+info <- extract_info_metabo(metadata_file = samp_recip,
                                 metabo_file = "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Metabolomic local cohort Saint-Louis_filtered.xlsx")
-recip_meta <- merged$subset_meta
-meta_metabo <- merged$meta_metabo
-data_metabolites <- merged$data_metabolites
+recip_meta <- info$subset_meta
+meta_metabo <- info$meta_metabo
+data_metabolites <- info$data_metabolites
 
 ##### filtering #####
 
@@ -64,7 +49,7 @@ colnames(normdata$output) <- colnames(logdata$output)
 norm_data <- normdata$output
 
 # merge dataframes:
-big_mat <- merge.data.frame(normdata$output, recip_meta, by = "row.names") %>% 
+big_mat <- merge.data.frame(normdata$output, recip_meta, by = "row.names") %>%
   tibble::column_to_rownames("Row.names")
 
 save(norm_data, file="norm_data.RData")
@@ -97,53 +82,59 @@ s.arrow(pca$c1, clabel = .2, boxes = F)
 s.class(pca$c1, as.factor(as.character(meta_metabo[2,])))
 s.class(pca$c1, as.factor(as.character(meta_metabo[1,])))
 
-# which metabolites/ sub-pathways/ super-pathways drive the pca axes?
-metadat <- t(meta_metabo)
-rownames(metadat) <- metadat[,3]
-princ_axes <- merge.data.frame(metadat, pca$c1, by = "row.names")
-sub_pathways <- names(table(princ_axes[,2]))
-sub_path_ranks <- lapply(seq_along(sub_pathways), function(i){
-  ranks <- which(princ_axes[order(princ_axes$CS1, decreasing = T),2]==sub_pathways[i])
-  mean_rank <- sum(ranks)/length(ranks)
-  names(mean_rank) <- sub_pathways[i]
-  mean_rank
-}) # returns mean rank of each sub_pathway
+res <- find_subpatways_driving_PC(meta_metabo, pca = pca, PC = 2)
+ordered_subpathways_pc2 <- res$ordered_subpathways
+princ_axes <- res$princ_axes
 
-head(unlist(sub_path_ranks[order(unlist(sub_path_ranks))])) #petits nombres = associes ++ a l'axe 1 (gr non-tol ++)
-tail(unlist(sub_path_ranks[order(unlist(sub_path_ranks))])) #grands nombres = anti-associes a l'axe 1 (gr tol 1 tol 2)
-ordered_subpathways_pc1 <- unlist(sub_path_ranks[order(unlist(sub_path_ranks))])
-save(ordered_subpathways_pc1, file="ordered_subpathways_pc1.RData")
+save(ordered_subpathways_pc2, file="ordered_subpathways_pc2.RData")
 ordered_metabolites_pc1 <- princ_axes[order(princ_axes$CS1),c(1,2,5)]
 save(ordered_metabolites_pc1, file = "ordered_metabolites_pc1.RData")
 
 
-## only on tol1 and tol2 ##
-mydata <- big_mat[which(big_mat$GROUP!="non_tolerant"),] # select only tol 1 and tol 2
-mat2use <- norm_data[which(big_mat$GROUP!="non_tolerant"),] 
+###############################
+#### only on tol1 and tol2 ####
+###############################
+
+mat2use <- norm_data[which(big_mat$GROUP!="non_tolerant"),]
 
 pca <- dudi.pca(mat2use[,-1], center = T, scale = T)
 4
 s.label(pca$li, clabel = .7)
-s.class(pca$li, as.factor(mat2use$Group), col=c("blue","green"),clabel=.7)
-s.class(pca$li[,2:3], as.factor(mat2use$Group), col=c("blue","green"),clabel=.7)
+s.class(pca$li, as.factor(mat2use$Group), col=c("blue","green"))
+s.class(pca$li[,2:3], as.factor(mat2use$Group), col=c("blue","green"))
 
-# which metabolites/ sub-pathways/ super-pathways drive the 2nd pca axis (difference between tol1 and tol2 ++)?
-princ_axes <- cbind(metadat, pca$c1)
-sub_pathways <- names(table(princ_axes[,1]))
-sub_path_ranks <- lapply(seq_along(sub_pathways), function(i){
-  ranks <- which(princ_axes[order(princ_axes$CS3),1]==sub_pathways[i])
-  mean_rank <- sum(ranks)/length(ranks)
-  names(mean_rank) <- sub_pathways[i]
-  mean_rank
-}) # returns mean rank of each sub_pathway
-
-head(unlist(sub_path_ranks[order(unlist(sub_path_ranks))])) #petits nombres = associes ++ a l'axe 3 (gr 1-tol ++)
-tail(unlist(sub_path_ranks[order(unlist(sub_path_ranks))])) #grands nombres = anti-associes a l'axe  (gr tol 2)
+# which metabolites/ sub-pathways/ super-pathways drive the 3rd pca axis (difference between tol1 and tol2 ++)?
+res <- find_subpatways_driving_PC(meta_metabo, pca = pca, PC = 3)
+ordered_subpathways_pc3 <- res$ordered_subpathways
+head(ordered_subpathways_pc3)
+princ_axes <- res$princ_axes
 ordered_metabolites_pc3 <- princ_axes[order(princ_axes$CS3),c(1,2,6)]
-ordered_subpathways_pc3 <- unlist(sub_path_ranks[order(unlist(sub_path_ranks))])
 save(ordered_metabolites_pc3, file = "ordered_metabolites_pc3.RData")
 save(ordered_subpathways_pc3, file="ordered_subpathways_pc3.RData")
 
+# which metabolites/ sub-pathways drive the 1st pca axis (variability ++)?
+res <- find_subpatways_driving_PC(meta_metabo, pca = pca, PC = 1)
+ordered_subpathways_pc1 <- res$ordered_subpathways
+ordered_metabolites_pc1 <- res$princ_axes[order(res$princ_axes$CS1),c(1,2,5)]
+save(ordered_metabolites_pc1, file = "ordered_metabolites_tol_pc1.RData")
+save(ordered_subpathways_pc1, file="ordered_subpathways_tol_pc1.RData")
+
+pca <- dudi.pca(big_mat[which(big_mat$GROUP!="non_tolerant"),2:590], center = T, scale = T)
+4
+s.class(pca$li, as.factor(big_mat$GROUP[which(big_mat$GROUP!="non_tolerant")]), col=c("blue","green"))
+s.class(pca$li, as.factor(big_mat$GENDER[which(big_mat$GROUP!="non_tolerant")]), col=c("red","blue"))
+s.class(pca$li, as.factor(big_mat$cGVHD[which(big_mat$GROUP!="non_tolerant")]), col=c("#bfd3e6","#88419d"))
+s.class(pca$li, as.factor(big_mat$SOURCEOFGRAFT[which(big_mat$GROUP!="non_tolerant")]), col=c("red","blue"))
+s.class(pca$li, as.factor(big_mat$DONORCMV[which(big_mat$GROUP!="non_tolerant")]), col=c("red","blue"))
+s.class(pca$li, as.factor(big_mat$DONORSEX[which(big_mat$GROUP!="non_tolerant")]), col=c("red","blue"))
+s.class(pca$li, as.factor(big_mat$GROUPE[which(big_mat$GROUP!="non_tolerant")]), col=c("red","blue"))
+s.class(pca$li, as.factor(big_mat$CMVStatus[which(big_mat$GROUP!="non_tolerant")]), col=c("red","blue"))
+
+
+recip_info <- merge.data.frame(pca$li, recip_meta[which(recip_meta$GROUP!="non_tolerant"),],
+                               by = "row.names") %>%
+  arrange(Axis1)
+bla <- lm(Axis1~GROUP*GENDER*CMVStatus*GROUPE*DONORSEX*DONORCMV*DONORGROUPE, recip_info)
 
 
 ### differential analysis
