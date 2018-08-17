@@ -45,7 +45,7 @@ my_labels2 <- c("NK?","mDC?","Monocytes","CD25","B memory?","B naive","B naive",
                 "TH17","TH2","CD8 TCM","CD8 TCM","CD4 and CD8 TSCM")
 
 PlotStars(fsom_meta$FlowSOM,
-          markers=c("CD11a","CD16","CD27","CD3","CD4","CD45RA","CD8a","HLADR","CD19","CD38","CD161","CCR5"),
+          markers=c("CD11a","CD16","CD27","CD3","CD4","CD45RA","CD8a","HLADR","CD19","CD38","CD161","CCR5","CCR7"),
           backgroundValues = my_labels,
           backgroundColor = c(rainbow(n = 7, alpha = 0.2), "#FFFFFF00"))
 
@@ -87,7 +87,7 @@ legend("topleft", legend = c("non_tolerant","primary_tol","secondary_tol"), fill
 # On pctgs_meta and functional markers :
 
 metacluster_ids <- FlowSOM::GetMetaclusters(fsom_recip)
-# functional_marks<-markers[which(markers[,5]==1),1]
+#functional_marks<-markers[which(markers[,5]==1),1]
 # functional_marks <- functional_marks[-c(4,6,9)] # Lag3, PD1 and CD24 already used as pheno_marks
 # names(functional_marks) <- names(prettyMarkerNames)[which(prettyMarkerNames%in%functional_marks)]
 data("functional_marks")
@@ -130,14 +130,16 @@ rownames(big_mat) <- big_mat$Row.names
 # rm columns containing NAs :
 big_mat <- dplyr::select(big_mat,which(colSums(is.na(big_mat))==0))
 
-pheatmap(big_mat[,2:241])
+pheatmap(big_mat[,2:331])
 annot = as.data.frame(big_mat$GROUP)
 rownames(annot) <- rownames(big_mat)
 pheatmap::pheatmap(as.matrix(big_mat[,2:241]), annotation_row = annot, cex=.7)
 
-big_mat[,2:241] <- apply(big_mat[,2:241],2,scale) # scale matrix
+big_mat[,2:331] <- apply(big_mat[,2:331],2,scale) # scale matrix
 big_mat[,2:31] <- big_mat[,2:31 * length(functional_marks)] # rebalance weights so that weights pctgs = weights MFIs
-dist_mat <- dist(big_mat[,2:241])
+big_mat <- big_mat %>% select_if(~!any(is.na(.)))
+
+dist_mat <- dist(big_mat[,2:322])
 library(dendextend)
 hclust_meta<-hclust(dist_mat, method = "ward.D2")
 dend <- as.dendrogram(hclust_meta)
@@ -162,8 +164,8 @@ legend("topleft", legend = c("non_tolerant","primary_tol","secondary_tol"), fill
 #        fill = c("blue","greenyellow","seagreen1","magenta","red","gold","dodgerblue"),cex=0.5)
 
 
-pheatmap::pheatmap(as.matrix(big_mat[,2:241]), cluster_rows = hclust_meta, annotation_row = annot, cex=.7)
-pheatmap::pheatmap(as.matrix(big_mat[,2:241]),
+pheatmap::pheatmap(as.matrix(big_mat[,2:322]), cluster_rows = hclust_meta, annotation_row = annot, cex=.7)
+pheatmap::pheatmap(as.matrix(big_mat[,2:322]),
                    cluster_rows = hclust_meta,
                    annotation_row = big_mat[,c("GROUP","DATEOFCYTOFEXPERIMENT")],
                    cex=.7)

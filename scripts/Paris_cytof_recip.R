@@ -115,6 +115,8 @@ pctgs <- generate_pctgs(
 )
 #pctgs <- t(apply(counts, 1, function(x){x/sum(x)}))
 save(fsom, counts, pctgs, file = "FlowSOM_49recipients.Rdata")
+pctgs_recip <- pctgs
+save(pctgs_recip, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/pctgs_recip.RData")
 
 #### Visualising cluster pctgs :
 ## PCA/ tSNE on cluster pctgs
@@ -130,6 +132,7 @@ ggplot_analysis_results("tSNE", data_matrix = pctgs_recip, metadata = samp_recip
 ####################################################################################
 
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/fsom_recip.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/pctgs_recip.RData")
 
 pctgs_meta_recip <- t(apply(pctgs_recip, 1, function(x){tapply(x, fsom_recip$metaclustering, sum)}))
 rownames(pctgs_meta_recip) <- names(rownames(pctgs_meta_recip))
@@ -194,7 +197,7 @@ pheatmap::pheatmap(as.matrix(big_mat[which(big_mat$GROUP != "Non_Tolerant"),2:31
 ggplot_analysis_results("PCA", data_matrix = pctgs_meta_recip, metadata = samp_recip,
                         col_by = "DATEOFCYTOFEXPERIMENT", shape_by = "GROUP")
 ggplot_analysis_results("tSNE", data_matrix = pctgs_meta_recip, metadata = samp_recip,
-                        col_by = "DATEOFCYTOFEXPERIMENT", shape_by = "GROUP")
+                        col_by = "CMVStatus", shape_by = "GROUP")
 
 
 
@@ -315,6 +318,7 @@ dev.off()
 
 ## between tSNE clusters:
 apart<- c("R690","R830","R219","R598","R2798","R836","R2589","03R","R419","R395","R212")
+apart<- c("R690","R830","R219","R598","R2798","R836","R2589","03R","R419","R395")
 #apart<- c("R1152","R2618","R2794","R709","R1131","R1267","R997","R773","09R","R874","R370","R297")
 colnames(patients_mfis) <- as.character(prettyMarkerNames[colnames(patients_mfis)])
 
@@ -352,9 +356,28 @@ dev.off()
 ## RandomForest ---------------------------------------
 
 library(randomForest)
-# I will analyse Receptors separately:
-recip_data<-cbind(sample_recip[,-c(1,4:12,27:49)],pctgs)
-recip2<-data.frame(lapply(recip_data[,1:16], as.factor))
+# I will analyse Recipients separately:
+
+samp_recip_filtered <- samp_recip %>%
+  select_if(~!any(is.na(.)))
+samp_recip_filtered <- samp_recip_filtered[,-c(1,4,7,9,10,27)]
+
+# on metadata only, to understand weird group:
+status <- rep ("normal", nrow(samp_recip))
+status[which(rownames(samp_recip)%in%apart)] <- "strange"
+samp_recip_annot <- samp_recip_filtered %>%
+  mutate(status = status)
+samp_recip_annot <- apply(samp_recip_annot, 2, as.factor)
+rf_r<-randomForest(status~., samp_recip_annot, ntree=5000, mtry=25)
+
+
+
+big_mat<- merge.data.frame(samp_recip_filtered, pctgs_meta_recip,
+                           by = "row.names")
+
+
+
+factors <- data.frame(lapply(big_mat[,1:16], as.factor))
 recip<-cbind(recip2,recip_data[,-c(1:16)])
 colnames(recip)[17:241]<-paste0("cluster_",c(1:225))
 set.seed(seed)
