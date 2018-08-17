@@ -8,16 +8,8 @@ library(devtools)
 library(MetaboAnalystR)
 
 ## excel file with info about samples
-samples <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx",
-                     check.names = FALSE) %>%
-  mutate(DATEOFCYTOFEXPERIMENT = as.Date(DATEOFCYTOFEXPERIMENT, "%d.%m.%Y"),
-         DOB = as.Date(DOB, "%d.%m.%Y"),
-         DOG = as.Date(DOG, "%d.%m.%Y"),
-         DATEOFSAMPLE = as.Date(DATEOFSAMPLE, "%d.%m.%Y"),
-         GROUP = tolower(GROUP)) %>%
-  dplyr::filter(!is.na(FCSNAME))
-rownames(samples)<- samples$Id.Cryostem.R
-samp_recip <- samples[which(rownames(samples) %in% names(recip_names)),]
+samp_recip <- import_patient_info(data_synthesis_file = "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx",
+                    patient_names = recip_names)
 
 ## strange numbers after row 390, I only read 80 first rows (corresponding to patients)
 metabo<- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Metabolomic local cohort Saint-Louis_filtered.xlsx",rows = c(4:83))
