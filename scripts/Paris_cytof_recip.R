@@ -13,6 +13,8 @@ options("scipen"=100)
 ############  aggregate flowframes #############
 ################################################
 
+# test
+
 fcs_dir <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/fcs/"
 fcs_names <- list.files(fcs_dir, pattern="^2.*fcs$")
 names(fcs_names) <- gsub("^[0-9]*_([^_]*)_.*", "\\1", fcs_names)
