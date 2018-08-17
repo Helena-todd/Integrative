@@ -8,12 +8,16 @@ library(devtools)
 library(MetaboAnalystR)
 
 ## excel file with info about samples
-samples <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018.xlsx", 
-                     check.names = FALSE) %>% 
+samples <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx",
+                     check.names = FALSE) %>%
   mutate(DATEOFCYTOFEXPERIMENT = as.Date(DATEOFCYTOFEXPERIMENT, "%d.%m.%Y"),
-         GROUP = tolower(GROUP)) %>% 
+         DOB = as.Date(DOB, "%d.%m.%Y"),
+         DOG = as.Date(DOG, "%d.%m.%Y"),
+         DATEOFSAMPLE = as.Date(DATEOFSAMPLE, "%d.%m.%Y"),
+         GROUP = tolower(GROUP)) %>%
   dplyr::filter(!is.na(FCSNAME))
 rownames(samples)<- samples$Id.Cryostem.R
+samp_recip <- samples[which(rownames(samples) %in% names(recip_names)),]
 
 ## strange numbers after row 390, I only read 80 first rows (corresponding to patients)
 metabo<- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Metabolomic local cohort Saint-Louis_filtered.xlsx",rows = c(4:83))
@@ -26,7 +30,7 @@ high_na_vars<-which(sum_nas>=40) # 85 columns have more than 50% NA
 metabo<-metabo[,-high_na_vars] # remove variables with NAs in more than half patients
 
 met <- apply(metabo,2,function(x){
-  
+
 })
 
 ## ------------------- analysis
@@ -54,7 +58,7 @@ fullModel<-~GROUP|GROUP+GENDER+CMVStatus+GROUPE+DONORSEX+DONORCMV+DONORGROUPE+HE
 reducedModel<-~1|GENDER+CMVStatus+GROUPE+DONORSEX+DONORCMV+DONORGROUPE+HEMATOLOGICDISORDER
 fullModelResults<-mxtrmod(ynames=colnames(rectab)[3:300],mxtrModel=fullModel,data=rectab)
 reducedModelResults<-mxtrmod(ynames=colnames(rectab)[3:300],mxtrModel=reducedModel,data=rectab,fullModel=fullModel)
-finalResult<-mxtrmodLRT(fullmod=fullModelResults,redmod=reducedModelResults,adj="BH") 
+finalResult<-mxtrmodLRT(fullmod=fullModelResults,redmod=reducedModelResults,adj="BH")
 finalResult
 ## ne trouve aucune pvalue ajustee en dessous de 1
 
@@ -75,7 +79,7 @@ iexpr <- cbind(impute.knn(data.matrix(expr))$data,
 head(iexpr[, 1:6])
 iexpr<-iexpr[,-80]
 
-pca<-prcomp(t(iexpr),scale. = T) 
+pca<-prcomp(t(iexpr),scale. = T)
 library(car)
 colrs<-metabo$GROUP %>% recode("'DONOR NOTOL'='yellow';'DONOR TOL1'='orange';'DONOR TOL2'='red';'RECIPIENT 1TOL'='green';'RECIPIENT 2TOL'='blue';'RECIPIENT NOTOL'='black'")
 plot(pca$x[,1:2], col=colrs)
@@ -98,7 +102,7 @@ plot(tsne1, col=colrs)
 
 metabo_tsne <- metabo %>% dplyr::mutate(tsne_1 = tsne1[,1],
                                           tsne_2 = tsne1[,2])
-ggplot(metabo_tsne) + 
+ggplot(metabo_tsne) +
   geom_point(aes(x = tsne_1, y = tsne_2, col = as.factor(GROUP)), size = 4) +
   geom_text(aes(x = tsne_1, y = tsne_2, label= PATIENT.ID)) +
   theme_minimal() +
@@ -115,7 +119,7 @@ iiexpr$group<-as.factor(iiexpr$group)
 # colnames(iiexpr)<-gsub("^[[:digit:]]{+}-","",colnames(iiexpr),ignore.case=T)
 # colnames(iiexpr)<-gsub("[(,),.,+,-,:,/]","",colnames(iiexpr),ignore.case=T)
 # head(colnames(iiexpr))
-# 
+#
 # bli<-colnames(t(iexpr))[which(duplicated(colnames(iiexpr)))]
 # bli2<-bli[grep("^[[:digit:]][-^,]",bli)]
 # blii2<-unlist(lapply(bli2,function(x) paste(strsplit(x,"-")[[1]][2],strsplit(x,"-")[[1]][1],sep="")))

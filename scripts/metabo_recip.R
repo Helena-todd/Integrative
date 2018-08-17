@@ -108,9 +108,10 @@ res <- find_subpatways_driving_PC(meta_metabo, pca = pca, PC = 3)
 ordered_subpathways_pc3 <- res$ordered_subpathways
 head(ordered_subpathways_pc3)
 princ_axes <- res$princ_axes
-ordered_metabolites_pc3 <- princ_axes[order(princ_axes$CS3),c(1,2,6)]
+ordered_metabolites_pc3 <- princ_axes[order(princ_axes$CS3),c(1,2,7)]
 save(ordered_metabolites_pc3, file = "ordered_metabolites_pc3.RData")
 save(ordered_subpathways_pc3, file="ordered_subpathways_pc3.RData")
+write.xlsx(ordered_metabolites_pc3, file = "ordered_metabolites_along_PC3.xls")
 
 # which metabolites/ sub-pathways drive the 1st pca axis (variability ++)?
 res <- find_subpatways_driving_PC(meta_metabo, pca = pca, PC = 1)
