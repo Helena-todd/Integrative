@@ -68,6 +68,7 @@ patients_mfis<-mfis[,lapply(.SD, median), by=patients]
 patients_mfis<-as.data.frame(patients_mfis)
 rownames(patients_mfis)<-patients_mfis[,1]
 patients_mfis<-patients_mfis[,-1]
+colnames(patients_mfis) <- as.character(prettyMarkerNames[colnames(patients_mfis)])
 
 ggplot_analysis_results("PCA", data_matrix = patients_mfis, metadata = samp_recip,
                         col_by = "DATEOFCYTOFEXPERIMENT", shape_by = "GROUP")
@@ -360,55 +361,57 @@ dev.off()
 library(randomForest)
 # I will analyse Recipients separately:
 
-samp_recip_filtered <- samp_recip %>%
-  select_if(~!any(is.na(.)))
+samp_recip_filtered <- import_patient_info(data_synthesis_file = "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx",
+                                                      patient_names = recip_names)
 samp_recip_filtered <- samp_recip_filtered[,-c(1,4,7,9,10,27)]
+apart<- c("R690","R830","R219","R598","R2798","R836","R2589","03R","R419","R395")
 
 # on metadata only, to understand weird group:
-status <- rep ("normal", nrow(samp_recip))
-status[which(rownames(samp_recip)%in%apart)] <- "strange"
+status <- rep ("normal", nrow(samp_recip_filtered))
+status[which(rownames(samp_recip_filtered)%in%apart)] <- "strange"
+status <- as.factor(status)
 samp_recip_annot <- samp_recip_filtered %>%
   mutate(status = status)
-samp_recip_annot <- apply(samp_recip_annot, 2, as.factor)
-rf_r<-randomForest(status~., samp_recip_annot, ntree=5000, mtry=25)
+rownames(samp_recip_annot) <- rownames(samp_recip_filtered)
 
+rf_r<-randomForest(status~., samp_recip_annot, ntree=15000, mtry=20)
+tree_func(final_model = rf_r)
+rf_r
+plot(rf_r)
 
+# on pctgs only, to understand weird group :
 
-big_mat<- merge.data.frame(samp_recip_filtered, pctgs_meta_recip,
-                           by = "row.names")
+annot_status <- as.data.frame(samp_recip_annot$status)
+rownames(annot_status) <- rownames(samp_recip_annot)
+colnames(annot_status) <- "status"
 
+big_mat<- merge.data.frame(annot_status, pctgs_meta_recip,
+                           by = "row.names") %>%
+  column_to_rownames("Row.names")
 
+colnames(big_mat) <- c(colnames(big_mat)[1], paste0("meta",colnames(big_mat[,2:ncol(big_mat)])))
+set.seed(1)
+rf_meta<-randomForest(status~., big_mat, ntree= 5000, mtry=20)
+tree_func(final_model = rf_meta)
+rf_meta
+plot(rf_meta)
 
-factors <- data.frame(lapply(big_mat[,1:16], as.factor))
-recip<-cbind(recip2,recip_data[,-c(1:16)])
-colnames(recip)[17:241]<-paste0("cluster_",c(1:225))
-set.seed(seed)
-rf_clust<-randomForest(GROUP~., recip, ntree= 5000, mtry=100)
+pheatmap::pheatmap(pctgs_meta_recip, annotation_row = annot_status,
+                   cex=.8)
 
-set.seed(seed)
-rf_r_metadata<-randomForest(GROUP~., recip2)
-
-#on metaclusters and metadata
-recip_meta<-cbind(sample_recip[,-c(1,4:12,27:49)],pctgs_meta)
-recip2<-data.frame(lapply(recip_meta[,1:16], as.factor))
-recip<-cbind(recip2,recip_meta[,-c(1:16)])
-colnames(recip)[17:46]<-paste0("cluster_",c(1:30))
-rf_r<-randomForest(GROUP~., recip)
-
-#on metaclusters only
-recip_meta<-as.data.frame(cbind(sample_recip[,2],pctgs_meta))
-recip_meta[,1]<-as.factor(sample_recip[,2])
-colnames(recip_meta)<-c("GROUP",paste0("cluster_",c(1:30)))
-set.seed(seed)
-rf_r<-randomForest(GROUP~., recip_meta, ntree=5000, mtry=25)
 
 #on mfis
-recip_data<-cbind(sample_recip[,-c(1,4:12,27:49)],patients_mfis[,-27])
-recip2<-data.frame(lapply(recip_data[,1:16], as.factor))
-recip<-cbind(recip2,recip_data[,-c(1:16)])
-colnames(recip)[17:42]<-colnames(patients_mfis)[-27]
-set.seed(seed)
-rf_mfis<-randomForest(GROUP~., recip, ntree= 50000, mtry=20)
+recip_data <- merge.data.frame(annot_status, patients_mfis, by = "row.names") %>%
+  column_to_rownames("Row.names")
+
+set.seed(1)
+rf_mfis<-randomForest(status~., recip_data, ntree= 5000, mtry=20)
+tree_func(final_model = rf_mfis)
+rf_mfis
+plot(rf_mfis)
+
+pheatmap::pheatmap(recip_data[,-1], annotation_row = annot_status,
+                   cex=.8)
 
 vector2col<-rep(1,225)
 vector2col[c(15,121,182,157,24,219,12)]<-2
