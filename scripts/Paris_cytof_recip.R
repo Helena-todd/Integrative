@@ -361,7 +361,9 @@ dev.off()
 library(randomForest)
 # I will analyse Recipients separately:
 
-samp_recip_filtered <- import_patient_info(data_synthesis_file = "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx",
+dataPath <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx"
+dataPath <- "~/VIB/documents_22.02.18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx"
+samp_recip_filtered <- import_patient_info(data_synthesis_file = dataPath,
                                                       patient_names = recip_names)
 samp_recip_filtered <- samp_recip_filtered[,-c(1,4,7,9,10,27)]
 apart<- c("R690","R830","R219","R598","R2798","R836","R2589","03R","R419","R395")
@@ -413,9 +415,45 @@ plot(rf_mfis)
 pheatmap::pheatmap(recip_data[,-1], annotation_row = annot_status,
                    cex=.8)
 
-vector2col<-rep(1,225)
-vector2col[c(15,121,182,157,24,219,12)]<-2
-PlotNumbers(fsom$FlowSOM,backgroundValues = vector2col, backgroundColor = c("red","green"))
+
+
+### on groups tol 1 and tol 2, to see if there is any difference:
+samp_tol <- samp_recip_filtered[which(samp_recip_filtered$GROUP != "non_tolerant"),]
+
+### on metadata only:
+rf_r<-randomForest(GROUP~., samp_tol, ntree=30000, mtry=20)
+tree_func(final_model = rf_r)
+rf_r
+plot(rf_r) # always errors remaining (20% error on primary tol)
+
+### on pctgs meta :
+group <- as.data.frame(samp_tol$GROUP)
+rownames(group) <- rownames(samp_tol)
+colnames(group) <- "GROUP"
+
+big_mat<- merge.data.frame(group, pctgs_meta_recip,
+                           by = "row.names") %>%
+  column_to_rownames("Row.names")
+
+colnames(big_mat) <- c(colnames(big_mat)[1], paste0("meta",colnames(big_mat[,2:ncol(big_mat)])))
+set.seed(1)
+rf_meta<-randomForest(GROUP~., big_mat, ntree= 50000, mtry=20)
+tree_func(final_model = rf_meta)
+rf_meta
+plot(rf_meta) # huge error (30% for secondary, 70% for primary)
+
+### on pctgs :
+rownames(pctgs_recip) <- names(rownames(pctgs_recip))
+big_mat<- merge.data.frame(group, pctgs_recip,
+                           by = "row.names") %>%
+  column_to_rownames("Row.names")
+
+colnames(big_mat) <- c(colnames(big_mat)[1], paste0("clust",colnames(big_mat[,2:ncol(big_mat)])))
+set.seed(1)
+rf_meta<-randomForest(GROUP~., big_mat, ntree= 50000, mtry=20)
+rf_meta
+plot(rf_meta)
+tree_func(final_model = rf_meta) # huge error, 70% prim, 42% sec
 
 
 
