@@ -19,7 +19,10 @@ fcs_dir <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_
 fcs_names <- list.files(fcs_dir, pattern="^2.*fcs$")
 names(fcs_names) <- gsub("^[0-9]*_([^_]*)_.*", "\\1", fcs_names)
 recip_names<-fcs_names[grep("R",names(fcs_names))]
-recip_names<- recip_names[-which(names(recip_names)%in%c("12R","18R"))] # only CD19+ cells: removed
+#recip_names<- recip_names[-which(names(recip_names)%in%c("12R","18R"))] # only CD19+ cells: removed
+recip_names_filt <- recip_names[-which(names(recip_names)%in%c("12R","18R",
+                                    "R690","R830","R219","R598","R2798",
+                                    "R836","R2589","03R","R419","R395"))]
 
 ff_agg_recip <- fcs_to_agg(fcs_dir= fcs_dir, fcs_names= recip_names, seed = 1, cTotal = 10000*49,
            output_name = "aggregate_recip.fcs")
