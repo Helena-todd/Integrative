@@ -14,7 +14,7 @@ load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/r
 #########   find metaclusters cell types   ##########
 #####################################################
 
-PlotStars(fsom_meta$FlowSOM)
+PlotStars(fsom_meta_recip$FlowSOM)
 
 ## table of associations btw markers and populations ------
 pop_mark <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_3:04:18/CYTOF_David_Michonneau_excel/Populations and markers_filtered.xlsx",
@@ -27,7 +27,7 @@ pop_mark <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_3:04
 cellTypes <- markers_of_cellTypes(marker_table = pop_mark)
 
 # identify cell type for each fsom cluster
-celllabels <- identify_fsom_cellPopulations(fsom = fsom_meta, prettyMarkerNames, cellTypes,
+celllabels <- identify_fsom_cellPopulations(fsom = fsom_meta_recip, prettyMarkerNames, cellTypes,
                               pdf_name = "pops_filt_marks_grid.pdf", view="MST")
 
 
@@ -35,14 +35,14 @@ celllabels <- identify_fsom_cellPopulations(fsom = fsom_meta, prettyMarkerNames,
 PlotStars(fsom_meta$FlowSOM, markers = c("CD11a","CD16","CD27","CD3","CD4","CD45RA","CD8a","HLADR","CD19",
                                          "CD38","CD161","CCR5"))
 
-my_labels <- c("Monocytes","mDCs","Monocytes","Unknown","B","B","B","B","B","Plasmo","CD8","CD4","CD4","Unknown","B",
-               "Unknown","CD4","Monocytes","Unknown","CD8","CD4","CD8","CD8","CD4","CD4","CD4",
-               "CD4","CD8","CD8","CD4-CD8 TSCM")
+# my_labels <- c("Monocytes","mDCs","Monocytes","Unknown","B","B","B","B","B","Plasmo","CD8","CD4","CD4","Unknown","B",
+#                "Unknown","CD4","Monocytes","Unknown","CD8","CD4","CD8","CD8","CD4","CD4","CD4",
+#                "CD4","CD8","CD8","CD4-CD8 TSCM")
 
-my_labels2 <- c("NK?","mDC?","Monocytes","CD25","B memory?","B naive","B naive","B naive","B",
-                "Plasmoblasts","CD8 Temra","CD4 TSCM","TH1","Myeloid?","B naive","CD3 CD45RA CD11a","CD4 TEM",
-                "Monocytes","NKT? Treg?","TFH reg?","CD4 TEM","CD8 TEM","CD8 TEM","CD4 TCM?","CD4 naive",
-                "TH17","TH2","CD8 TCM","CD8 TCM","CD4 and CD8 TSCM")
+my_labels <- c("CD8+Tem","CD4+Tem","TH2","CD4+Naive","CD4+Tem","CD4+Tem","CD4+Tscm","CD8+Tem","Treg",
+                "Tscm?","CD8+Naive","CD4+Temra","CD8+Tcm","NK","CD8+Temra","TH17","CD8+Tem","TH","Unk",
+                "CD8+Tscm","CD4+Tscm","Treg","CD8+Temra","Conv_DCs","Trans_B","NaiveB","mono","NaiveB",
+                "mDCs","TFHreg")
 
 PlotStars(fsom_meta$FlowSOM,
           markers=c("CD11a","CD16","CD27","CD3","CD4","CD45RA","CD8a","HLADR","CD19","CD38","CD161","CCR5","CCR7"),
@@ -68,9 +68,9 @@ dist_mat <- dist(big_mat[,2:31])
 library(dendextend)
 hclust_meta<-hclust(dist_mat, method = "ward.D2")
 dend <- as.dendrogram(hclust_meta)
-grop<-rep(1,49)
-grop[which(big_mat$GROUP=="Secondary_tolerant")]<-2
-grop[which(big_mat$GROUP=="Non_Tolerant")]<-3
+grop<-rep(1,39)
+grop[which(big_mat$GROUP=="secondary_tolerant")]<-2
+grop[which(big_mat$GROUP=="non_tolerant")]<-3
 labels_colors(dend) <-
   c("red","blue","green")[sort_levels_values(
     as.numeric(grop)[order.dendrogram(dend)]
@@ -130,53 +130,46 @@ rownames(big_mat) <- big_mat$Row.names
 # rm columns containing NAs :
 big_mat <- dplyr::select(big_mat,which(colSums(is.na(big_mat))==0))
 
-pheatmap(big_mat[,2:331])
+pheatmap::pheatmap(big_mat[,2:301])
 annot = as.data.frame(big_mat$GROUP)
 rownames(annot) <- rownames(big_mat)
 pheatmap::pheatmap(as.matrix(big_mat[,2:241]), annotation_row = annot, cex=.7)
 
-big_mat[,2:331] <- apply(big_mat[,2:331],2,scale) # scale matrix
+big_mat[,2:301] <- apply(big_mat[,2:301],2,scale) # scale matrix
 big_mat[,2:31] <- big_mat[,2:31 * length(functional_marks)] # rebalance weights so that weights pctgs = weights MFIs
 big_mat <- big_mat %>% select_if(~!any(is.na(.)))
 
-dist_mat <- dist(big_mat[,2:322])
+dist_mat <- dist(big_mat[,2:290])
 library(dendextend)
 hclust_meta<-hclust(dist_mat, method = "ward.D2")
 dend <- as.dendrogram(hclust_meta)
-grop<-rep(1,49)
-grop[which(big_mat$GROUP=="Secondary_tolerant")]<-2
-grop[which(big_mat$GROUP=="Non_Tolerant")]<-3
-labels_colors(dend) <-
-  c("blue","red","green")[sort_levels_values(
-    as.numeric(grop)[order.dendrogram(dend)]
-  )]
+# grop<-rep(1,39)
+# grop[which(big_mat$GROUP=="secondary_tolerant")]<-2
+# grop[which(big_mat$GROUP=="non_tolerant")]<-3
 # labels_colors(dend) <-
-#      rainbow(7)[sort_levels_values(
-#      as.numeric(as.factor(big_mat$DATEOFCYTOFEXPERIMENT))[order.dendrogram(dend)]
-# )]
+#   c("red","blue","green")[sort_levels_values(
+#     as.numeric(grop)[order.dendrogram(dend)]
+#   )]
+labels_colors(dend) <-
+     rainbow(7)[sort_levels_values(
+     as.numeric(as.factor(big_mat$DATEOFCYTOFEXPERIMENT))[order.dendrogram(dend)]
+)]
 dend <- set(dend, "labels_cex", 0.7)
 
 plot(dend,
      main = "Clustering on fsom metaclusters and functional marker MFIs",
      horiz =  F,  nodePar = list(cex = .007))
-legend("topleft", legend = c("non_tolerant","primary_tol","secondary_tol"), fill = c("red","green","blue"),cex=0.75)
-# legend("topleft", legend = names(table(as.factor(big_mat$DATEOFCYTOFEXPERIMENT))),
-#        fill = c("blue","greenyellow","seagreen1","magenta","red","gold","dodgerblue"),cex=0.5)
+#legend("topleft", legend = c("non_tolerant","primary_tol","secondary_tol"), fill = c("red","green","blue"),cex=0.75)
+legend("topleft", legend = names(table(as.factor(big_mat$DATEOFCYTOFEXPERIMENT))),
+        fill = c("blue","greenyellow","seagreen1","magenta","red","gold","dodgerblue"),cex=0.5)
 
 
-pheatmap::pheatmap(as.matrix(big_mat[,2:322]), cluster_rows = hclust_meta, annotation_row = annot, cex=.7)
-pheatmap::pheatmap(as.matrix(big_mat[,2:322]),
+pheatmap::pheatmap(as.matrix(big_mat[,2:290]), cluster_rows = hclust_meta, annotation_row = annot, cex=.7)
+pheatmap::pheatmap(as.matrix(big_mat[,2:290]),
                    cluster_rows = hclust_meta,
                    annotation_row = big_mat[,c("GROUP","DATEOFCYTOFEXPERIMENT")],
                    cex=.7)
 
-
-## clustering only on metadata :
-filtered_metadata <- samp_recip[,c(2,3,12:24,26)]
-bla <- filtered_metadata
-for ( i in 1:16){
-  bla[,i] <- as.numeric(as.factor((bla[,i])))
-}
 
 
 ###################################
