@@ -29,6 +29,8 @@ fsom2fsom_meta <- function(fsom, colsToUse, pctgs_patients, plot_size){
   fsom_meta_recip$FlowSOM$map$codes <- t(metacluster_MFIs)
   fsom_meta_recip$FlowSOM$map$medianValues <- t(metacluster_MFIs)
   fsom_meta_recip$FlowSOM$map$colsUsed <- seq_along(rownames(metacluster_MFIs))
+  fsom_meta_recip$FlowSOM$map$grid <- cbind(seq_len(ncol(metacluster_MFIs)),
+                                            rep(1, ncol(metacluster_MFIs)))
   fsom_meta_recip$FlowSOM <- BuildMST(fsom_meta_recip$FlowSOM, silent = T)
 
   if((class(plot_size) == "numeric")||(class(plot_size) == "integer")){
