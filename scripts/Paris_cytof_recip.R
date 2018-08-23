@@ -238,7 +238,7 @@ PlotStars(fsom_meta_recip$FlowSOM,
 
 plot.new()
 graphics::legend("center", legend = levels(as.factor(my_labels)),
-                 fill = rainbow(22, alpha = 0.3), cex = 0.7, ncol = 2, bty = "n")
+                 fill = rainbow(22, alpha = 0.3), cex = 0.6, ncol = 2, bty = "n")
 
 pdf("Plot_Stars_meta_recipients_21_marks.pdf")
 for (i in 1:nrow(pctgs_recip)){
@@ -379,11 +379,12 @@ library(randomForest)
 # I will analyse Recipients separately:
 
 dataPath <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx"
-dataPath <- "~/VIB/documents_22.02.18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx"
+#dataPath <- "~/VIB/documents_22.02.18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx"
 samp_recip_filtered <- import_patient_info(data_synthesis_file = dataPath,
                                                       patient_names = recip_names)
 samp_recip_filtered <- samp_recip_filtered[,-c(1,4,7,9,10,27)]
 apart<- c("R690","R830","R219","R598","R2798","R836","R2589","03R","R419","R395")
+recip_names <- recip_names[-which(names(recip_names)%in%apart)]
 
 # on metadata only, to understand weird group:
 status <- rep ("normal", nrow(samp_recip_filtered))
