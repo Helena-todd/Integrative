@@ -24,3 +24,8 @@ Cell types associated to the clusters in the FlowSOM object
 \description{
 Matches cell types to the clusters of a FlowSOM object.
 }
+\examples{
+
+celllabels <- identify_fsom_cellPopulations(fsom = fsom_meta_recip, prettyMarkerNames, cellTypes,
+pdf_name = "pops_filt_marks_grid.pdf", view="MST")
+}
