@@ -12,6 +12,9 @@
 #' @export
 #'
 #' @examples
+#'
+#' celllabels <- identify_fsom_cellPopulations(fsom = fsom_meta_recip, prettyMarkerNames, cellTypes,
+#' pdf_name = "pops_filt_marks_grid.pdf", view="MST")
 identify_fsom_cellPopulations <- function(fsom, prettyMarkerNames, cellTypes, pdf_name, view){
   labels <- rep("Unknown", fsom$FlowSOM$map$nNodes)
   if(class(colnames(fsom$FlowSOM$map$medianValues))=="character"){
