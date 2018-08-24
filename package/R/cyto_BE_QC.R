@@ -2,9 +2,11 @@
 #' BE_QC
 #'
 #' @param aggreg_table Table containing all cells from patients of interest, as returned by the function BE_aggregate_to_table
-#' @param png_name_1 Name of the output file
+#' @param png_name_1 Name of the output file correspnding to the original values
+#' @param aggreg_table_rescaled Table aggreg_table, but with re-scaled values
+#' @param png_name_2 Name of the output file correspnding to the re-scaled values
 #'
-#' @return A png file
+#' @return Two png files
 #' @export
 #'
 #' @examples
@@ -13,7 +15,7 @@
 #' fcs_dir = fcs_dir, markers = functional_marks,
 #' metadata_patients = samp_recip)
 #' BE_QC(aggreg_table, "my_output_file.png")
-BE_QC <- function( aggreg_table, png_name_1){
+BE_QC <- function( aggreg_table, png_name_1, aggreg_table_rescaled, png_name_2){
   ix <- aggreg_table %>%
     mutate(i = row_number()) %>%
     group_by(file_id) %>%
@@ -31,13 +33,12 @@ BE_QC <- function( aggreg_table, png_name_1){
       height = 2500)
 
   sat_gathered <- sampled_aggreg_table %>%
-    gather(marker, value, -file_id, -cluster_id, -day_id) %>%
-    mutate(marker_name = prettyMarkerNames[marker])
+    gather(marker, value, -file_id, -cluster_id, -day_id)
 
   g <- ggplot(sat_gathered) + # %>% dplyr::filter(marker_name == "IL10")) +
     geom_violin(aes(file_id, value, colour = factor(day_id))) +
     labs(x = "", y = "") +
-    facet_wrap(~ marker_name)
+    facet_wrap(~ marker)
 
 
   #ggsave()
@@ -56,6 +57,25 @@ BE_QC <- function( aggreg_table, png_name_1){
   #                  )
   #})
   #print(patchwork::wrap_plots(ggplots, ncol = 4))
+  print(g)
+  dev.off()
+
+  sampled_aggreg_table_rescaled <-
+    aggreg_table_rescaled[ix,] %>%
+    arrange(day_id) %>%
+    mutate(file_id = factor(file_id, levels = unique(file_id)))
+
+  grDevices::png(file.path(paste0(png_name_2)),
+                 width = 5000,
+                 height = 2500)
+
+  sat_gathered <- sampled_aggreg_table_rescaled %>%
+    gather(marker, value, -file_id, -cluster_id, -day_id)
+
+  g <- ggplot(sat_gathered) + # %>% dplyr::filter(marker_name == "IL10")) +
+    geom_violin(aes(file_id, value, colour = factor(day_id))) +
+    labs(x = "", y = "") +
+    facet_wrap(~ marker)
   print(g)
   dev.off()
 }
