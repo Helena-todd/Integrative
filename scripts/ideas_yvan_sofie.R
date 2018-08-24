@@ -97,26 +97,24 @@ aggreg_table <- BE_aggregate_fcs_files(patient_names = recip_names, fsom = fsom_
                                        metadata_patients = samp_recip)
 save(aggreg_table, file = "aggreg_table.RData")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/aggreg_table.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/aggreg_table_rescaled_data_table.RData")
+
 
 # plot markers expression before and after in 5000 cells from each patient:
-png_name_1 <- "test_png_unscaled_data.png"
-BE_QC( aggreg_table, png_name_1)
-
 colnames(aggreg_table)[1:10] <- as.character(prettyMarkerNames[colnames(aggreg_table)[1:10]])
+png_name_1 <- "png_unscaled_data.png"
+png_name_2 <- "png_scaled_data.png"
+BE_QC( aggreg_table, png_name_1, aggreg_table_rescaled = aggreg_table_rescaled_dt, png_name_2)
+
+
 mean_MFI_df <- BE_compute_MFI_per_metaclust(aggreg_table, fsom = fsom_recip)
 
 annot_row <- samp_recip[,c("GROUP","DATEOFCYTOFEXPERIMENT")] %>%
   mutate(DATEOFCYTOFEXPERIMENT = as.factor(DATEOFCYTOFEXPERIMENT))
+rownames(annot_row) <- samp_recip$Id.Cryostem.R
 pheatmap::pheatmap(mean_MFI_df, annotation_row = annot_row)
 
-aggreg_table %>%
-  group_by(file_id) %>%
-  summarise(Cd114Di = mean(Cd114Di))
-
-aggreg_table %>%
-  group_by(file_id) %>%
-  mutate(Cd114Di = Cd114Di / sum(Cd114Di)) %>%
-  ungroup()
+aggreg_table_rescaled <- BE_rescale_per_day(aggreg_table)
 
 
 # On pctgs_meta and functional markers :
