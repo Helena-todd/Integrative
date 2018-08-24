@@ -4,15 +4,19 @@
 \alias{BE_QC}
 \title{BE_QC}
 \usage{
-BE_QC(aggreg_table, png_name_1)
+BE_QC(aggreg_table, png_name_1, aggreg_table_rescaled, png_name_2)
 }
 \arguments{
 \item{aggreg_table}{Table containing all cells from patients of interest, as returned by the function BE_aggregate_to_table}
 
-\item{png_name_1}{Name of the output file}
+\item{png_name_1}{Name of the output file correspnding to the original values}
+
+\item{aggreg_table_rescaled}{Table aggreg_table, but with re-scaled values}
+
+\item{png_name_2}{Name of the output file correspnding to the re-scaled values}
 }
 \value{
-A png file
+Two png files
 }
 \description{
 BE_QC
