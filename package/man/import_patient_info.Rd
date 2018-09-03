@@ -4,7 +4,7 @@
 \alias{import_patient_info}
 \title{import_patient_info}
 \usage{
-import_patient_info(data_synthesis_file, patient_names)
+import_patient_info(data_synthesis_file, patient_names, patient_type)
 }
 \arguments{
 \item{data_synthesis_file}{The excel file name}

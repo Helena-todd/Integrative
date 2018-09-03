@@ -16,21 +16,32 @@
 #' mytable <- import_patient_info(data_synthesis_file = "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx",
 #' patient_names = recip_names)
 
-import_patient_info <- function(data_synthesis_file, patient_names){
+import_patient_info <- function(data_synthesis_file, patient_names, patient_type){
   samples <- read.xlsx(data_synthesis_file,
             check.names = FALSE) %>%
     dplyr::filter(!is.na(FCSNAME))
   rownames(samples)<- samples$Id.Cryostem.R
 
-  samp_patients <- samples[which(rownames(samples) %in% names(patient_names)),] %>%
-    select_if(~!any(is.na(.))) %>%
-    mutate(DATEOFCYTOFEXPERIMENT = as.Date(DATEOFCYTOFEXPERIMENT, "%d.%m.%Y"),
-           DOB = as.Date(DOB, "%d.%m.%Y"),
-           DOG = as.Date(DOG, "%d.%m.%Y"),
-           DATEOFSAMPLE = as.Date(DATEOFSAMPLE, "%d.%m.%Y"),
-           lastfollowup = as.Date(lastfollowup, "%d.%m.%Y"),
-           GROUP = tolower(GROUP)) %>%
-    mutate_if(is.character, as.factor)
+  if(patient_type == "recip"){
+    samp_patients <- samples[which(rownames(samples) %in% names(patient_names)),] %>%
+      select_if(~!any(is.na(.))) %>%
+      mutate(DATEOFCYTOFEXPERIMENT = as.Date(DATEOFCYTOFEXPERIMENT, "%d.%m.%Y"),
+             DOB = as.Date(DOB, "%d.%m.%Y"),
+             DOG = as.Date(DOG, "%d.%m.%Y"),
+             DATEOFSAMPLE = as.Date(DATEOFSAMPLE, "%d.%m.%Y"),
+             lastfollowup = as.Date(lastfollowup, "%d.%m.%Y"),
+             GROUP = tolower(GROUP)) %>%
+      mutate_if(is.character, as.factor)
+  } else {
+    samp_patients <- samples[which(rownames(samples) %in% names(patient_names)),] %>%
+      select_if(~!any(is.na(.))) %>%
+      mutate(DATEOFCYTOFEXPERIMENT = as.Date(DATEOFCYTOFEXPERIMENT, "%d.%m.%Y"),
+             DOB = as.Date(DOB, "%d.%m.%Y"),
+             DATEOFSAMPLE = as.Date(DATEOFSAMPLE, "%d.%m.%Y"),
+             GROUP = tolower(GROUP)) %>%
+      mutate_if(is.character, as.factor)
+  }
+
   rownames(samp_patients)<- samp_patients$Id.Cryostem.R
   return(samp_patients)
 }
