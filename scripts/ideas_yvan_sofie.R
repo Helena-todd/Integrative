@@ -97,24 +97,29 @@ aggreg_table <- BE_aggregate_fcs_files(patient_names = recip_names, fsom = fsom_
                                        metadata_patients = samp_recip)
 save(aggreg_table, file = "aggreg_table.RData")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/aggreg_table.RData")
+
+aggreg_table_rescaled <- BE_rescale_per_day(aggreg_table)
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/aggreg_table_rescaled_data_table.RData")
 
 
 # plot markers expression before and after in 5000 cells from each patient:
 colnames(aggreg_table)[1:10] <- as.character(prettyMarkerNames[colnames(aggreg_table)[1:10]])
-png_name_1 <- "png_unscaled_data.png"
-png_name_2 <- "png_scaled_data.png"
-BE_QC( aggreg_table, png_name_1, aggreg_table_rescaled = aggreg_table_rescaled_dt, png_name_2)
+png_name_1 <- "png_unscaled_01_data.png"
+png_name_2 <- "png_scaled_01_data.png"
+BE_QC( aggreg_table, png_name_1, aggreg_table_rescaled = aggreg_table_rescaled, png_name_2)
 
 
-mean_MFI_df <- BE_compute_MFI_per_metaclust(aggreg_table, fsom = fsom_recip)
+mean_MFI_df <- BE_compute_MFI_per_metaclust(aggreg_table_rescaled, fsom = fsom_recip)
 
 annot_row <- samp_recip[,c("GROUP","DATEOFCYTOFEXPERIMENT")] %>%
   mutate(DATEOFCYTOFEXPERIMENT = as.factor(DATEOFCYTOFEXPERIMENT))
 rownames(annot_row) <- samp_recip$Id.Cryostem.R
-pheatmap::pheatmap(mean_MFI_df, annotation_row = annot_row)
+pheatmap::pheatmap(mean_MFI_df, annotation_row = annot_row,
+                   annotation_colors = list("GROUP"=c("non_tolerant"="#e31a1c90",
+                                                      "primary_tolerant"="#00FF0090",
+                                                      "secondary_tolerant"="#0000FF90")))
 
-aggreg_table_rescaled <- BE_rescale_per_day(aggreg_table)
+
 
 
 # On pctgs_meta and functional markers :
