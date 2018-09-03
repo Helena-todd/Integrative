@@ -1,9 +1,9 @@
 BE_rescale_per_day <- function(aggreg_table){
   days <- names(table(aggreg_table$day_id))
   min_day1 <- apply(aggreg_table[which(aggreg_table$day_id==days[1]),1:10],2,
-                    function(x) quantile(x, 0.001))
+                    function(x) quantile(x, 0))
   max_day1 <- apply(aggreg_table[which(aggreg_table$day_id==days[1]),1:10],2,
-                    function(x) quantile(x, 0.999))
+                    function(x) quantile(x, 1))
   aggreg_table <- as.data.frame(aggreg_table)
 
   for(i in 2:length(days)){
@@ -17,6 +17,6 @@ BE_rescale_per_day <- function(aggreg_table){
                                                                                        to = c(min_day1[marker], max_day1[marker]))
     }
   }
-  aggreg_table
+  data.table::as.data.table(aggreg_table)
 }
 
