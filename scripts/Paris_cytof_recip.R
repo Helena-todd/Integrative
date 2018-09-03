@@ -41,7 +41,8 @@ load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/r
 ## import metadat info :
 dataPath <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx"
 samp_recip <- import_patient_info(data_synthesis_file = dataPath,
-                                           patient_names = recip_names)
+                                           patient_names = recip_names,
+                                  patient_type = "recip")
 
 plot_aggregate_markers(patient_names = recip_names, samp_patients=samp_recip, color_by = "DATEOFCYTOFEXPERIMENT",
                        prettyMarkerNames, pheno_marks, png_name= "Aggregate_date_39recip.png",
