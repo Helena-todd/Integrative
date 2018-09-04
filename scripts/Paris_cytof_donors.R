@@ -10,7 +10,6 @@ suppressPackageStartupMessages({
 library(BioGVHD)
 options("scipen"=100)
 
-library(BioGVHD)
 
 
 ################################################
@@ -288,6 +287,8 @@ dev.off()
 ## RandomForest ---------------------------------------
 
 library(randomForest)
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/donors/pctgs_meta_donor.RData")
+
 ### On groups:
 ### on metadata only:
 samp_donor_filtered <- samp_donor[,-c(1,4,6:9)]
