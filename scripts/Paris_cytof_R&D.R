@@ -5,6 +5,8 @@ suppressPackageStartupMessages({
   library("magrittr")
   library("flowCore")
   library("flowWorkspace")
+  library("ggraph")
+  library("igraph")
 })
 library(BioGVHD)
 options("scipen"=100)
@@ -251,12 +253,67 @@ ggplot_analysis_results("tSNE", data_matrix = pctgs_meta_rd, metadata = samp_rd,
 ################   compute couple statistics   #################
 ################################################################
 
+compatibility_scores <- compute_compatibility_score(samp_rd)
+
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/pctgs_meta_rd.RData")
 pca_metaclust <- prcomp(pctgs_meta_rd)
 sdevs <- pca_metaclust$sdev # keep PC1, PC2 and maybe PC3
 
+compute_pca_distance_scores(pca_metaclust, samp_rd)
+
+couple_group <- lapply(unique(samp_rd$COUPLENUMBER), function(x){
+  couple <- samp_rd[which(samp_rd$COUPLENUMBER==x),]
+  group <- couple$GROUP[1]
+})
+couple_group <- unlist(couple_group)
+
+table1 <- cbind( compatibility_scores, pca_distance_scores)
+table1 <- table1[,-6]
+table1 <- as.data.frame(table1) %>%
+  mutate(group = couple_group)
+save(table1, file = "table1.RData")
+
+bla <- apply(table1[,(2:7)], 1, mean)
+bli <- as.data.frame(cbind(bla, couple_group))
+bli %>% group_by(couple_group) %>% summarise(mean(bla), sd(bla))
+
+table1 %>% group_by(group) %>% summarise(mean(pc1_diff), sd(pc1_diff))
+mean_pca <- apply(table1[,6:7],1,mean)
+res_pca <- as.data.frame(cbind(mean_pca, couple_group)) %>%
+  group_by(couple_group) %>%
+  summarise(mean(mean_pca), sd(mean_pca))
 
 
+pctg_scores <- compute_pctg_scores(pctgs_meta = pctgs_meta_rd, samp_rd)
+mean_pctgs <- apply(pctg_scores, 1, mean)
+res_pctgs <- as.data.frame(cbind(mean_pctgs, couple_group)) %>%
+  group_by(couple_group) %>%
+  summarise(mean(mean_pctgs), sd(mean_pctgs))
 
+## linear model using differences in pctgs :
+lm_mat <- as.data.frame(cbind(pctg_scores, couple_group))
+lm_model <- lm(couple_group~., lm_mat)
+
+table2 <- cbind( compatibility_scores, pctg_scores)
+table2 <- as.data.frame(table2) %>%
+  mutate(group = couple_group)
+save(table2, file = "table2.RData")
+
+# random forest
+red_table <- table2[which(table1$group!="non_tolerant"),c(-1)]
+colnames(red_table)[5:44] <- paste0("meta_", colnames(red_table[,5:44]))
+red_table$group <- as.factor(as.character(red_table$group))
+rf_r<-randomForest(group~., red_table, ntree=15000, mtry=10)
+rf_r
+plot(rf_r)
+tree_func(final_model = rf_r)
+
+red_table <- table2[which(table1$group!="non_tolerant"),c(2:5,46)]
+red_table$group <- as.factor(as.character(red_table$group))
+rf_r<-randomForest(group~., red_table, ntree=15000, mtry=2)
+rf_r
+plot(rf_r)
+tree_func(final_model = rf_r)
 
 
 #################################################################
@@ -347,125 +404,10 @@ graphics::legend("center", legend = levels(as.factor(my_labels)),
 
 
 
+#####################################################
+################    RandomForest    #################
+#####################################################
 
-# Anova ------------------------------------------------------------------------
-
-gr_res<- sample_recip$GROUP
-gr_res[which((sample_recip$aGVHD==1)&(sample_recip$GROUP=="non_tolerant"))] <- "non_tol_GVHD"
-
-p_v <- rep(NA, ncol(pctgs))
-for (i in seq_len(ncol(pctgs))) {
-  data_tmp <- data.frame(Var = pctgs[, i],
-                         #Visit = group_res$groups)
-                         Visit = group_res$groups)
-
-  library(ggplot2)
-  ggplot(data_tmp) + geom_boxplot(aes(x = Visit, y = Var)) + theme_minimal()
-
-  fit <- aov(Var ~ Visit, data = data_tmp)
-  p_v[i] <- summary(fit)[[1]][["Pr(>F)"]][1]
-}
-
-means <- apply(pctgs, 2, function(x){tapply(x, group_res$groups, mean)})
-means_norm <- (means - min(means))/(max(means) - min(means))
-
-type <- factor(c("--", "Decreased", "Increased")[1 +
-                                                   (p_v < 0.05) +
-                                                   (p_v < 0.05 & means[3,] > means[1,])],
-               levels = c("--", "Decreased", "Increased"))
-
-plot_list = list()
-for (i in seq_along(which(type!="--"))){
-  data_tmp <- data.frame(Var = pctgs[, which(type!="--")[i]],
-                         Visit = group_res$groups)
-  p=ggplot(data_tmp) + geom_boxplot(aes(x = Visit, y = Var)) + theme_minimal() +
-    ggtitle(paste0("Cluster ", which(type!="--")[i]))
-  plot_list[[i]] = p
-}
-
-pdf(file="differing_clusters.pdf")
-for (i in seq_along(which(type!="--"))) {
-  print(plot_list[[i]])
-}
-dev.off()
-
-PlotStars(UpdateNodeSize(fsom$FlowSOM, reset = TRUE, maxNodeSize = 5),
-          markers=c("Ce142Di","Nd144Di","Nd145Di","Nd146Di","Tm169Di","Er170Di","Yb172Di",
-                    "Pr141Di","Sm147Di"),
-          backgroundValue = type,
-          backgroundColor = c("#FFFFFF00", "#00FFFF55", "#FF000055"))
-PlotNumbers(UpdateNodeSize(fsom$FlowSOM, reset = TRUE, maxNodeSize = 0),
-            backgroundValue = type,
-            backgroundColor = c("#FFFFFF00", "#00FFFF55", "#FF000055")) # change font size!
-
-PlotVariable(fsom$FlowSOM, as.numeric(fsom$metaclustering))
-
-
-## plot each cluster of interest separately:
-gr<-rep(1, dim(ff_agg_recip@exprs)[1])
-dat<-as.data.frame(cbind(ff_agg_recip@exprs, gr))
-dat$gr<-rep(sample_recip$GROUP, each=10000)
-colnames(dat)[1:73]<-prettyMarkerNames
-dat<-dat[which(fsom$FlowSOM$map$mapping[,1]==24),]
-
-
-pdf("Cluster_24.pdf", width = 20, height = 20)
-plots <- list()
-for(i in seq_along(prettyMarkerNames[markersToPlot])){
-  marker<-prettyMarkerNames[markersToPlot][i]
-  plots[[i]] <- ggplot(dat, aes_string(x = as.character(marker), fill = "gr")) + geom_density(alpha = 0.5)
-  #tidy_df <- dat %>% gather(col, val, one_of(prettyMarkerNames[markersToPlot])))
-  #ggplot(tidy_df) + geom_point(aes(x, val)) + facet_wrap(~col)
-}
-multiplot(plotlist = plots,
-          layout = matrix(1:36, nrow = 6, byrow = TRUE)[6:1,])
-dev.off()
-
-
-
-
-###############################################################################
-####### BOXPLOTS of marker expressions in different groups of patients ########
-###############################################################################
-
-## between tSNE clusters:
-apart<- c("R690","R830","R219","R598","R2798","R836","R2589","03R","R419","R395","R212")
-apart<- c("R690","R830","R219","R598","R2798","R836","R2589","03R","R419","R395")
-#apart<- c("R1152","R2618","R2794","R709","R1131","R1267","R997","R773","09R","R874","R370","R297")
-colnames(patients_mfis) <- as.character(prettyMarkerNames[colnames(patients_mfis)])
-
-mark<-"CD45"
-patients_mfis$clustered<- rep("other", dim(patients_mfis)[1])
-patients_mfis$clustered[which(rownames(patients_mfis)%in%apart)]<- "clustered"
-
-## between tolerant 1 and tolerant 2:
-mfis_tol <- mfis %>% # remove non tolerant patients
-  filter(!patients %in% samp_recip$Id.Cryostem.R[which(samp_recip$GROUP=="Non_Tolerant")])
-colnames(mfis_tol)[-which(colnames(mfis_tol)=="patients")] <-
-  as.character(prettyMarkerNames[which(names(prettyMarkerNames)%in%colnames(mfis_tol)[-which(colnames(mfis_tol)=="patients")])])
-
-mfis_tol$clustered <- rep("Tolerant_1", nrow(mfis_tol))
-tol_2 <- samp_recip$Id.Cryostem.R[which(samp_recip$GROUP=="Secondary_tolerant")]
-mfis_tol$clustered[which(mfis_tol$patients%in%tol_2)]<- "Tolerant_2"
-
-mat2plot <- mfis_tol
-png("boxplots_tol1_tol2.png",
-    width = 4000,
-    height = 2000)
-par(cex.lab = 2.5, mar = c(4.1,5.1,2.1,2.1))
-layout(matrix(1:30, nrow=5, byrow = TRUE))
-lapply(seq_along(colnames(mat2plot)[-c(ncol(mat2plot),ncol(mat2plot)-1)]), function(i){
-  boxplot(mat2plot[,i]~clustered, data=mat2plot,
-          main=colnames(mat2plot)[i], xaxt="n", cex.main=4,
-          cex.axis=3, cex.sub=3, col=c("lightgreen","blue"))
-  axis(side=1, at=c(1:2), labels=c("Tolerant_1","Tolerant_2"), las=2,cex=1)
-})
-dev.off()
-
-
-
-
-## RandomForest ---------------------------------------
 
 library(randomForest)
 # I will analyse Recipients separately:
