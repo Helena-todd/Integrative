@@ -53,7 +53,7 @@ big_mat <- merge.data.frame(normdata$output, recip_meta, by = "row.names") %>%
   tibble::column_to_rownames("Row.names")
 
 save(norm_data, file="norm_data.RData")
-meta_metabo <- meta_metabo[,which(meta_metabo[3,]%in%colnames(norm_data))] # only selected metabolites
+meta_metabo <- meta_metabo[,which(as.character(meta_metabo[3,])%in%colnames(norm_data))] # only selected metabolites
 save(meta_metabo, file="meta_metabo.RData")
 save(big_mat, file="big_mat.RData")
 save(recip_meta, file="recip_meta.RData")
@@ -155,7 +155,37 @@ TwoGroupPlots(mat2use[,-1], res$output[,1], foldchanges = res$output[,4], pvalue
 
 
 
+####################################################
+####### Turn metabolites -> subpathway table #######
+####################################################
+
+load("outputs/data/metabo/recip/logdata.RData")
+load("outputs/data/metabo/recip/meta_metabo.RData")
+
+data_metabo <- as.data.frame(logdata$output[,-1])
+meta_metabo <- meta_metabo[,which(as.character(meta_metabo[3,])%in%colnames(data_metabo))]
+data_metabo <- data_metabo[,which(colnames(data_metabo)%in%as.character(meta_metabo[3,]))]
+
+library(data.table)
+t_data_metabo <- t(data_metabo)
+subpath_info <- as.character(meta_metabo[1,])
+data_meta <- as.data.table(t_data_metabo)
+binded <- cbind(data_meta, subpath_info)
+
+subpaths <- binded[,lapply(.SD, median), by=subpath_info]
+subpaths <- as.data.frame(subpaths) %>% column_to_rownames("subpath_info")
+subpaths <- t(subpaths)
+save(subpaths, file = "subpaths_table.RData")
+
+### tomorrow : normalise ? and plot heatmap, + maybe annotate per superpathway
+normdata <- Normalise(logdata$output, method = "median")
+colnames(normdata$output) <- colnames(logdata$output)
+norm_data <- normdata$output
 
 
-
-
+subpaths <- t(subpaths)
+pheatmap::pheatmap(subpaths,
+                   annotation_row = recip_meta[,c("GROUP", "GENDER")],
+                   annotation_colors = list("GROUP"=c("non_tolerant"="#e31a1c90",
+                                                      "primary_tolerant"="#00FF0090",
+                                                      "secondary_tolerant"="#0000FF90")))
