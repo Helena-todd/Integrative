@@ -382,7 +382,8 @@ library(randomForest)
 dataPath <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx"
 #dataPath <- "~/VIB/documents_22.02.18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx"
 samp_recip_filtered <- import_patient_info(data_synthesis_file = dataPath,
-                                                      patient_names = recip_names)
+                                           patient_names = recip_names,
+                                           patient_type = "recip")
 samp_recip_filtered <- samp_recip_filtered[,-c(1,4,7,9,10,27)]
 apart<- c("R690","R830","R219","R598","R2798","R836","R2589","03R","R419","R395")
 recip_names <- recip_names[-which(names(recip_names)%in%apart)]
