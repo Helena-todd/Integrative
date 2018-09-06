@@ -300,15 +300,18 @@ table2 <- as.data.frame(table2) %>%
 save(table2, file = "table2.RData")
 
 # random forest
-red_table <- table2[which(table1$group!="non_tolerant"),c(-1)]
-colnames(red_table)[5:44] <- paste0("meta_", colnames(red_table[,5:44]))
-red_table$group <- as.factor(as.character(red_table$group))
-rf_r<-randomForest(group~., red_table, ntree=15000, mtry=10)
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/tables/table1.RData")
+
+#red_table <- table1[which(table1$group!="non_tolerant"),c(-1)]
+#colnames(red_table)[5:44] <- paste0("meta_", colnames(red_table[,5:44]))
+#red_table$group <- as.factor(as.character(red_table$group))
+table1 <- table1[,-1]
+rf_r<-randomForest(group~., table1, ntree=15000, mtry=5)
 rf_r
 plot(rf_r)
 tree_func(final_model = rf_r)
 
-red_table <- table2[which(table1$group!="non_tolerant"),c(2:5,46)]
+red_table <- table1[which(table1$group!="non_tolerant"),]
 red_table$group <- as.factor(as.character(red_table$group))
 rf_r<-randomForest(group~., red_table, ntree=15000, mtry=2)
 rf_r
