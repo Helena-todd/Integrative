@@ -35,6 +35,8 @@ compute_pca_distance_scores <- function(pca_metaclust, samp_rd){
   pca_distance_scores[,3] <- scales::rescale(pca_distance_scores[,3],
                                              to = c(0.5, 1))
   pca_distance_scores[,3] <- (1-pca_distance_scores[,3]) + 0.5
+
+  return(pca_distance_scores)
 }
 
 
