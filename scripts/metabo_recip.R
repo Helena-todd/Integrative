@@ -2,6 +2,7 @@ library(dplyr)
 library(openxlsx)
 library(metabolomics)
 library(BioGVHD)
+library(tidyverse)
 
 
 #################################
@@ -161,6 +162,7 @@ TwoGroupPlots(mat2use[,-1], res$output[,1], foldchanges = res$output[,4], pvalue
 
 load("outputs/data/metabo/recip/logdata.RData")
 load("outputs/data/metabo/recip/meta_metabo.RData")
+load("outputs/data/metabo/recip/recip_meta.RData")
 
 data_metabo <- as.data.frame(logdata$output[,-1])
 meta_metabo <- meta_metabo[,which(as.character(meta_metabo[3,])%in%colnames(data_metabo))]
@@ -177,15 +179,32 @@ subpaths <- as.data.frame(subpaths) %>% column_to_rownames("subpath_info")
 subpaths <- t(subpaths)
 save(subpaths, file = "subpaths_table.RData")
 
-### tomorrow : normalise ? and plot heatmap, + maybe annotate per superpathway
-normdata <- Normalise(logdata$output, method = "median")
-colnames(normdata$output) <- colnames(logdata$output)
-norm_data <- normdata$output
+### Normalise :
+subpaths_norm <- apply(subpaths, 2, scale)
+rownames(subpaths_norm) <- rownames(subpaths)
+superpaths <- lapply(seq_along(colnames(subpaths_norm)), function(i){
+  superpath <- as.character(meta_metabo[2,which(meta_metabo[1,]==colnames(subpaths_norm)[i])])[1]
+})
+superpaths <- as.data.frame(unlist(superpaths))
+rownames(superpaths) <- colnames(subpaths_norm)
 
-
-subpaths <- t(subpaths)
-pheatmap::pheatmap(subpaths,
+# heatmap of subpaths, annotated by group, gender, and superpaths
+pheatmap::pheatmap(subpaths_norm,
                    annotation_row = recip_meta[,c("GROUP", "GENDER")],
                    annotation_colors = list("GROUP"=c("non_tolerant"="#e31a1c90",
                                                       "primary_tolerant"="#00FF0090",
-                                                      "secondary_tolerant"="#0000FF90")))
+                                                      "secondary_tolerant"="#0000FF90")),
+                   annotation_col = superpaths)
+
+## random forest:
+subpaths_annot <- cbind.data.frame(recip_meta[,c("GROUP", "GENDER")], subpaths, by = "row_names")
+subpaths_annot <- subpaths_annot[,-c(2,80)]
+colnames(subpaths_annot) <- make.names(colnames(subpaths_annot))
+subpaths_annot$GROUP <- as.factor(subpaths_annot$GROUP)
+rf_metabo <- randomForest::randomForest(GROUP~., subpaths_annot)
+rf_metabo
+
+subpaths_tol <- subpaths_annot[which(subpaths_annot$GROUP!="non_tolerant"),]
+subpaths_tol$GROUP <- as.factor(as.character(subpaths_tol$GROUP))
+rf_metabo <- randomForest::randomForest(GROUP~., subpaths_tol)
+rf_metabo
