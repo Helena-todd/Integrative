@@ -23,13 +23,13 @@ tree_func <- function(final_model){#,
                             to = c(tree$`left daughter`, tree$`right daughter`))
 
   # convert to graph and delete the last node that we don't want to plot
-  graph <- graph_from_data_frame(graph_frame) %>%
-    delete_vertices("0")
+  graph <- igraph::graph_from_data_frame(graph_frame) %>%
+    igraph::delete_vertices("0")
 
   # set node labels
-  V(graph)$node_label <- gsub("_", " ", as.character(tree$`split var`))
-  V(graph)$leaf_label <- as.character(tree$prediction)
-  V(graph)$split <- as.character(round(tree$`split point`, digits = 2))
+  igraph::V(graph)$node_label <- gsub("_", " ", as.character(tree$`split var`))
+  igraph::V(graph)$leaf_label <- as.character(tree$prediction)
+  igraph::V(graph)$split <- as.character(round(tree$`split point`, digits = 2))
 
   # plot
   plot <- ggraph::ggraph(graph, 'dendrogram') +
