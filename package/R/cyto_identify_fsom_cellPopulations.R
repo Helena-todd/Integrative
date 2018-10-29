@@ -21,13 +21,16 @@ identify_fsom_cellPopulations <- function(fsom, prettyMarkerNames, cellTypes, pd
     colnames(fsom$FlowSOM$map$medianValues)<-prettyMarkerNames[colnames(fsom$FlowSOM$map$medianValues)]
   } else {colnames(fsom$FlowSOM$map$medianValues) <- colnames(fsom$FlowSOM$map$medianValues)}
 
+  fsom$FlowSOM$prettyColnames <- prettyMarkerNames
   names(fsom$FlowSOM$prettyColnames) <- fsom$FlowSOM$prettyColnames
   pdf(pdf_name)
   for(cellType in names(cellTypes)){
-    query_res <- QueryStarPlot(UpdateNodeSize(fsom$FlowSOM, reset = TRUE, maxNodeSize = 12),
+    query_res <- QueryStarPlot(UpdateNodeSize(fsom$FlowSOM, reset = TRUE, maxNodeSize = 8),
                                query = cellTypes[[cellType]], main = cellType, view=view)
     labels[query_res$selected] <- cellType
   }
   dev.off()
   return(labels)
 }
+
+
