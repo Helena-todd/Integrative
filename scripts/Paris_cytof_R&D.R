@@ -272,16 +272,22 @@ table1 <- table1[,-6]
 table1 <- as.data.frame(table1) %>%
   mutate(group = couple_group)
 save(table1, file = "table1.RData")
+load("outputs/data/cyto/rd/tables/table1.RData")
 
 bla <- apply(table1[,(2:7)], 1, mean)
 bli <- as.data.frame(cbind(bla, couple_group))
 bli %>% group_by(couple_group) %>% summarise(mean(bla), sd(bla))
 
-table1 %>% group_by(group) %>% summarise(mean(pc1_diff), sd(pc1_diff))
+table1 %>% group_by(group) %>% summarise(median(pc1_diff), sd(pc1_diff))
 mean_pca <- apply(table1[,6:7],1,mean)
 res_pca <- as.data.frame(cbind(mean_pca, couple_group)) %>%
   group_by(couple_group) %>%
   summarise(mean(mean_pca), sd(mean_pca))
+
+boxplot(table1$pc2_diff ~ table1$group,
+        main = "PC2 differences between donors and recipients",
+        col = c("#FF000080", "#00FF0080", "#0000FF80"),
+        ylim = c(0.5, 1))
 
 
 pctg_scores <- compute_pctg_scores(pctgs_meta = pctgs_meta_rd, samp_rd)
