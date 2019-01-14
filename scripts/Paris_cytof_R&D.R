@@ -50,7 +50,7 @@ prettyMarkerNames[is.na(prettyMarkerNames)] <-
 names(prettyMarkerNames) <- colnames(ff_agg_rd)
 
 save(ff_agg_rd, file = "ff_agg_rd.RData")
-load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/r&d/ff_agg_rd.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/ff_agg_rd.RData")
 
 
 plot_aggregate_markers(patient_names = rd_names, samp_patients=samp_rd, color_by = "DATEOFCYTOFEXPERIMENT",
@@ -153,12 +153,34 @@ PlotStars(UpdateNodeSize(fsom$FlowSOM, maxNodeSize = 8, reset = TRUE),
 PlotStars(UpdateNodeSize(fsom$FlowSOM, maxNodeSize = 8, reset = TRUE),
           markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD11a","CD16","CD127","CD3","CD4","CD45RA","CD8a","HLADR","CD19",
                                                                            "CD38","CD161","CCR7","CD27","CCR4","CCR5","CD5","CXCR3","Fas",
-                                                                           "foxP3","CD24","CXCR5"))])
+                                                                           "foxP3","CD24","CXCR5"))],
+          view = "grid")
+
+PlotNumbers(UpdateNodeSize(fsom$FlowSOM, maxNodeSize = 8, reset = TRUE),
+            view = "grid", fontSize = .5)
 
 PlotStars(UpdateNodeSize(fsom$FlowSOM, maxNodeSize = 8, reset = TRUE),
           markers = c("Gd158Di","Yb174Di","Dy161Di","Eu151Di")) # marqueurs fonctionnels
 save(fsom, file="fsom_rd.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/fsom_rd.RData")
 
+
+################################################################################
+############ annotate the fsom clusters manually or automatically ##############
+################################################################################
+
+pop_mark <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_3:04:18/CYTOF_David_Michonneau_excel/Populations and markers_filtered.xlsx",
+                      check.names=F) %>%
+  dplyr::filter(!is.na(Markers)) %>%
+  select(-c(CD45, GranzymeB)) # rm CD45: they are all positive (pre-gated by laetitia)
+# rm granzymeB: functional marker, not phenotypic
+
+# extract info of which markers are expressed in which cell types:
+cellTypes <- markers_of_cellTypes(marker_table = pop_mark)
+
+# identify cell type for each fsom cluster
+celllabels <- identify_fsom_cellPopulations(fsom = fsom, prettyMarkerNames, cellTypes,
+                                            pdf_name = "pops_filt_marks_grid.pdf", view="grid")
 
 
 ####################################################################################
