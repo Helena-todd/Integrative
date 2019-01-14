@@ -4,7 +4,8 @@
 \alias{BE_aggregate_fcs_files}
 \title{BE_aggregate_fcs_files}
 \usage{
-BE_aggregate_fcs_files(patient_names, fsom, fcs_dir, markers, metadata_patients)
+BE_aggregate_fcs_files(patient_names, fsom, fcs_dir, markers,
+  metadata_patients)
 }
 \arguments{
 \item{patient_names}{vector containing the fcs names of the patients, and their short names as names}
