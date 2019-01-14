@@ -258,6 +258,161 @@ identify_fsom_cellPopulations(fsom = fsom_rdn,
 
 
 
+
+##############################################
+####    backbone on donors + all recip    ####
+##############################################
+
+fcs_dir <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/fcs/"
+fcs_names <- list.files(fcs_dir, pattern="^2.*fcs$")
+names(fcs_names) <- gsub("^[0-9]*_([^_]*)_.*", "\\1", fcs_names)
+rd_names <- fcs_names[-which(names(fcs_names)%in%c("12R","18R","12D","D1071","D369"))]
+
+## import metadat info :
+dataPath <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Data synthesis local cohort Saint-Louis 032018_modified.xlsx"
+samp_rd <- import_patient_info(data_synthesis_file = dataPath,
+                                patient_names = rd_names,
+                                patient_type = "donor")
+
+rd_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER)==TRUE)]
+samp_rd <- samp_rd[which(samp_rd$COUPLENUMBER %in% rd_couples),]
+rd_names <- rd_names[which(names(rd_names) %in% samp_rd$Id.Cryostem.R)]
+
+#####################################################
+######## aggregate flowframes of all R and D ########
+#####################################################
+
+ff_agg_rd <- fcs_to_agg(fcs_dir= fcs_dir,
+                         fcs_names= rd_names,
+                         seed = 1,
+                         cTotal = 10000*length(rd_names),
+                         output_name = "aggregate_rd.fcs")
+
+prettyMarkerNames <- ff_agg_rd@parameters@data[,"desc"] #change names of markers in flowSOM
+prettyMarkerNames <- gsub(".*_", "", prettyMarkerNames)
+prettyMarkerNames[is.na(prettyMarkerNames)] <-
+  ff_agg_rd@parameters@data[,"name"][is.na(prettyMarkerNames)]
+names(prettyMarkerNames) <- colnames(ff_agg_rd)
+
+# Values of 2 first donors were too high compared to the others -> rescale
+files2rescale <- which(names(rd_names) %in% c("D1073", "D1502"))
+ref_file <- which(names(rd_names) %in% c("D2031"))
+
+min_ref <- apply(ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==ref_file),c(3,17,28:62,71)],2,
+                 function(x) quantile(x, 0.001))
+max_ref <- apply(ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==ref_file),c(3,17,28:62,71)],2,
+                 function(x) quantile(x, 0.999))
+
+for (file_nb in files2rescale){
+  for (marker in colnames(ff_agg_rd@exprs)[c(3,17,28:62,71)]){
+    ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==file_nb), marker] <-
+      scales::rescale(ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==file_nb), marker],
+                      to = c(min_ref[marker], max_ref[marker]))
+  }
+}
+# and plot results after scaling:
+plot_aggregate_markers(patient_names = rd_names, samp_patients=samp_rd, color_by = "DATEOFCYTOFEXPERIMENT",
+                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_rescaled_date_68rd.png",
+                       ff_agg = ff_agg_rd )
+
+save(ff_agg_rd, file = "ff_agg_rd.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/ff_agg_rd.RData")
+
+### markersToPlot
+markers <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/PANEL CYTOF corrigé 07.2018.xlsx",
+                     check.names = FALSE) ## excel file with info about markers
+
+## find only phenotypic markers
+pheno_marks<-markers[which(markers[,4]==1),1]
+pheno_marks <- pheno_marks[-which(pheno_marks=="CD45")] # all cells are already pregated on CD45+
+markersToPlot <-sapply(pheno_marks, function(m){
+  names(prettyMarkerNames[which(prettyMarkerNames==m)])})
+names(pheno_marks) <- markersToPlot
+colsToUse<-markersToPlot
+
+#### FlowSOM ####
+seed <- 1
+fsom_rd <- FlowSOM(ff_agg_rd,
+                    colsToUse = colsToUse,
+                    scale = FALSE,
+                    xdim = 15, ydim = 15, # larger grid because ++ markers
+                    nClus = 30,
+                    seed = seed)
+PlotStars(UpdateNodeSize(fsom_rd$FlowSOM, maxNodeSize = 8, reset = TRUE),
+          markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD11a","CD16","CD127","CD3","CD4","CD45RA","CD8a","HLADR","CD19",
+                                                                           "CD38","CD161","CCR7","CD27","CCR4","CCR5","CD5","CXCR3","Fas",
+                                                                           "foxP3","CD24","CXCR5"))],
+          view = "MST")
+
+PlotNumbers(UpdateNodeSize(fsom_rd$FlowSOM, maxNodeSize = 8, reset = TRUE),
+            fontSize = .5, view = "grid")
+
+save(fsom_rd, file = "fsom_rd.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_rd.RData")
+
+# identify cell type for each fsom cluster
+identify_fsom_cellPopulations(fsom = fsom_rd,
+                              prettyMarkerNames, cellTypes,
+                              pdf_name = "identify_clusters_rd_tree_view.pdf",
+                              view="MST")
+
+# manual annotation with Laetitia's labels:
+bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_14:01:19/Pop ID Backbone R&Dall.xlsx")
+
+pctgs_rd <- generate_pctgs(
+  recip_names = rd_names,
+  fsom = fsom_rd,
+  pdf_name = "Plot_Stars_68rd.pdf",
+  fcs_dir = fcs_dir,
+  output_dir = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/"
+)
+#pctgs <- t(apply(counts, 1, function(x){x/sum(x)}))
+rownames(pctgs_rd) <- names(rownames(pctgs_rd))
+save(pctgs_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_rd.RData")
+
+bb_rd_ordered <- bb_rd[order(bb_rd$Cluster),]
+fsom_rd$metaclustering <- bb_rd_ordered$Population
+pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclustering, sum)}))
+save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd.RData")
+
+#generate MFIs
+markers <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/PANEL CYTOF corrigé 07.2018.xlsx",
+                     check.names = FALSE) ## excel file with info about markers
+
+## find only functional markers
+funct_marks<-markers[which((markers[,5]==1)&(markers[,4]==0)),1]
+markersToPlot <- names(prettyMarkerNames)[which(prettyMarkerNames%in%funct_marks)]
+names(funct_marks) <- markersToPlot
+
+
+mfis_rd <- generate_meta_MFIs(rd_names, fsom_rd, cols_to_use = markersToPlot)
+
+save(mfis_rd, file ="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/mfis_meta_rd.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/mfis_meta_rd.RData")
+
+mfis_rd <- lapply(mfis_rd,function(x){
+  rownames(x) <- names(rownames(x))
+  x
+})
+names(mfis_rd) <- funct_marks
+
+fsom_meta_rd <- fsom2fsom_meta(fsom = fsom_rd, colsToUse = markersToPlot,
+                               pctgs_patients = pctgs_rd, plot_size = "equal_size")
+
+PlotStars(fsom_meta_rd$FlowSOM,
+          markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD4","CD8a","CD20","IgM","CD38","CD25","CD3","CD11a","CD19"))])
+PlotNumbers(fsom_meta_rd$FlowSOM)
+
+meta_rd_labels <- seq_len(nrow(fsom_meta_rd$FlowSOM$map$codes))
+new_labels <- lapply(seq_along(meta_rd_labels), function(i){
+  meta_rd_labels[i] <- bb_rd[which(bb_rd$Metacluster==i),2][1]
+})
+
+PlotLabels(fsom_meta_rd$FlowSOM, labels = new_labels)
+
+#PlotPies(fsom_meta_rd$FlowSOM, cellTypes = )
+
+
 ###############################################
 ####   backbone on D&R tolerant 1&2 only   ####
 ###############################################
