@@ -12,6 +12,7 @@ suppressPackageStartupMessages({
   library("flowWorkspace")
   library("ggraph")
   library("igraph")
+  library("scales")
 })
 library(BioGVHD)
 options("scipen"=100)
@@ -369,9 +370,10 @@ pctgs_rd <- generate_pctgs(
 #pctgs <- t(apply(counts, 1, function(x){x/sum(x)}))
 rownames(pctgs_rd) <- names(rownames(pctgs_rd))
 save(pctgs_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_rd.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_rd.RData")
 
 bb_rd_ordered <- bb_rd[order(bb_rd$Cluster),]
-fsom_rd$metaclustering <- bb_rd_ordered$Population
+fsom_rd$metaclustering <- bb_rd_ordered$Metacluster
 pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclustering, sum)}))
 save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd.RData")
 
@@ -396,6 +398,8 @@ mfis_rd <- lapply(mfis_rd,function(x){
 })
 names(mfis_rd) <- funct_marks
 
+# fsom with metaclusters instead of clusters:
+set.seed(1)
 fsom_meta_rd <- fsom2fsom_meta(fsom = fsom_rd, colsToUse = markersToPlot,
                                pctgs_patients = pctgs_rd, plot_size = "equal_size")
 
@@ -408,10 +412,63 @@ new_labels <- lapply(seq_along(meta_rd_labels), function(i){
   meta_rd_labels[i] <- bb_rd[which(bb_rd$Metacluster==i),2][1]
 })
 
-PlotLabels(fsom_meta_rd$FlowSOM, labels = new_labels)
+PlotLabels(fsom_meta_rd$FlowSOM, labels = new_labels, fontSize = .8)
 
-#PlotPies(fsom_meta_rd$FlowSOM, cellTypes = )
+group = samp_rd[rownames(pctgs_meta_rd), "GROUP"]
+PlotPies(fsom_meta_rd$FlowSOM, cellTypes = group[ff_agg_rd@exprs[,"File"]])
 
+orig_pctgs <- table(group[ff_agg_rd@exprs[,"File"]])/sum(table(group[ff_agg_rd@exprs[,"File"]]))
+df1 <- df <- data.frame(
+  group = names(orig_pctgs),
+  value = as.numeric(orig_pctgs)
+)
+
+plot_pie(df1, c("white", "cyan", "red"))
+
+patient_type = rep(0, length(rownames(samp_rd)))
+patient_type[grep("R", rownames(samp_rd))] <- "Recipient"
+patient_type[grep("D", rownames(samp_rd))] <- "Donor"
+PlotPies(fsom_meta_rd$FlowSOM, cellTypes = patient_type[ff_agg_rd@exprs[,"File"]])
+
+apart<- c("R690","R830","R219","R598","R2798","R836","R2589","03R","R419","R395")
+strange_normal <- rep("Normal", length(rownames(samp_rd)))
+strange_normal[which(rownames(samp_rd) %in% apart)] <- "Strange"
+PlotPies(fsom_meta_rd$FlowSOM, cellTypes = strange_normal[ff_agg_rd@exprs[,"File"]])
+
+
+### Plot pctgs' PCA:
+pca <- prcomp(pctgs_meta_rd)
+plot(pca$x)
+
+distances = c()
+
+for (i in names(table(samp_rd$COUPLENUMBER))){
+  print(i)
+  group_status <- samp_rd$GROUP[which(samp_rd$COUPLENUMBER==i)]
+  pt_coord <- pca$x[rownames(samp_rd)[which(samp_rd$COUPLENUMBER==i)],c(1:2)]
+  if(group_status[1]=="non_tolerant"){
+    lines(pt_coord,col="red")
+    points(pt_coord[1,1], pt_coord[1,2], pch = 19)
+  } else if(group_status[1]=="primary_tolerant"){
+    lines(pt_coord,col="green")
+    points(pt_coord[1,1], pt_coord[1,2], pch = 19)
+  } else {
+    lines(pt_coord,col="blue")
+    points(pt_coord[1,1], pt_coord[1,2], pch = 19)
+  }
+  distances = c(distances, sqrt((pt_coord[2,1]-pt_coord[1,1])^2 + (pt_coord[2,2]-pt_coord[1,2])^2))
+}
+
+list_couples <- names(table(samp_rd$COUPLENUMBER))
+names(distances) = samp_rd$GROUP[which(samp_rd$COUPLENUMBER %in% list_couples)][1:34]
+names(distances)[which(names(distances)=="non_tolerant")] <- "red"
+names(distances)[which(names(distances)=="primary_tolerant")] <- "green"
+names(distances)[which(names(distances)=="secondary_tolerant")] <- "blue"
+sorted <- sort(distances)
+plot(sorted, col = names(sorted), pch=19,
+     main = "Distance between donor and recipient from same couple")
+legend("topleft", c("non_tolerant","primary_tolerant","secondary_tolerant"),
+       col = c("red","green","blue"), pch = 19)
 
 ###############################################
 ####   backbone on D&R tolerant 1&2 only   ####
