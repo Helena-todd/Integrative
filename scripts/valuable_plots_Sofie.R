@@ -26,8 +26,8 @@ names(p_v_meta_adj) <- new_labels
 new_cluster_labels <- paste0(new_labels, " (", round(p_v_meta_adj, 3), ")")
 names(new_cluster_labels) <- new_labels
 
-means_meta <- apply(metacluster_pctgs, 2, function(x){tapply(x, group_res$groups, mean)})
-means_norm_meta <- (means - min(means))/(max(means) - min(means))
+# means_meta <- apply(metacluster_pctgs, 2, function(x){tapply(x, group_res$groups, mean)})
+# means_norm_meta <- (means - min(means))/(max(means) - min(means))
 
 
 pctgs_to_plot <- data.frame(metacluster_pctgs,
