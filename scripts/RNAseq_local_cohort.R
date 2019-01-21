@@ -29,18 +29,19 @@ normalizePerGene<-function(expMatrix){
 }
 
 ##### Load raw counts
-countData<-read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_RNAseq_14:01:19/RNAseq Count Saint_Louis (n=80)/Global_Table_Count _Saint_Louis_BASE_01.2019.xlsx")
+countData<-read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_RNAseq_14:01:19/Global_table_StLouis_completed.xlsx")
 colnames(countData) <- as.character(countData[1,]) # set patient names as colnames
 rownames(countData) <- countData$ID # set gene names as rownames
-countData_withinfo <- countData
+countData_withinfo <- countData[,-1]
 
 ## Look at the info on samples:
-plot(as.numeric(countData_withinfo[2,-1]), ylab = "unmapped genes", xlab = "patients")
-plot(as.numeric(countData_withinfo[3,-1]), ylab = rownames(countData)[3], xlab = "patients")
-above <- which(as.numeric(countData_withinfo[3,-1]) > 8*10^6)
-plot(as.numeric(countData_withinfo[4,-1]), ylab = rownames(countData)[4], xlab = "patients")
-plot(as.numeric(countData_withinfo[5,-1]), ylab = rownames(countData)[5], xlab = "patients")
-colnames(countData)[which(as.numeric(countData_withinfo[5,-1]) > 5*10^6)]
+plot(as.numeric(countData_withinfo[2,]), ylab = "unmapped genes", xlab = "patients")
+plot(as.numeric(countData_withinfo[3,]), ylab = rownames(countData)[3], xlab = "patients")
+above <- which(as.numeric(countData_withinfo[3,]) > 8*10^6)
+colnames(countData_withinfo)[above]
+plot(as.numeric(countData_withinfo[4,]), ylab = rownames(countData)[4], xlab = "patients")
+plot(as.numeric(countData_withinfo[5,]), ylab = rownames(countData)[5], xlab = "patients")
+colnames(countData_withinfo)[which(as.numeric(countData_withinfo[5,]) > 5*10^6)]
 # [1] "D708"
 
 countData <- countData[6:nrow(countData), 2:ncol(countData)] # rm the informations on unmapped, ambiguous...
@@ -64,8 +65,6 @@ donor_id <- grep("D",colnames(countData))
 recip_id <- grep("R",colnames(countData))
 
 counts <- countData[,c(donor_id, recip_id)]
-counts <- counts[,-18] # only NAs after 7143th row
-colData <- colData[-which(!rownames(colData)%in%colnames(counts)),] #also remove it in colData
 
 count_nb <- apply(counts,2,as.numeric) # turn characters into numerics
 rownames(count_nb) <- rownames(counts) # restore the rownmes which were lost in the transfo
@@ -76,12 +75,12 @@ y <- DGEList(counts = counts)
 keep = rowSums(cpm(y)>1) >= 3
 y = y[keep,]
 dim(y)
-## 18827    79
+## 18840    80
 
 # Reset lib sizes
 y$samples$lib.size = colSums(y$counts)
 
-# Rename genes grom ensembl ID -> gene symbol
+# Rename genes from ensembl ID -> gene symbol
 mart <- useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
 genes <- rownames(y$counts)
 G_list <- getBM(filters= "ensembl_gene_id",
@@ -97,18 +96,14 @@ gene_symbols <- G_list[[2]][-which(G_list[[2]]=="")]
 ensembl_symbols <- ensembl_symbols[-which(duplicated(gene_symbols))]
 gene_symbols <- gene_symbols[-which(duplicated(gene_symbols))]
 
-counts_gene_symbol <- y$counts[which(rownames(y$counts)%in%ensembl_symbols),]
-counts_gene_symbol <- as.data.frame(counts_gene_symbol)
+counts_gene_symbol <- y$counts
 
-which(duplicated(gene_symbols))
+for ( i in 1:length(gene_symbols)){
+  rownames(counts_gene_symbol)[which(rownames(counts_gene_symbol)==ensembl_symbols[i])] <-
+    gene_symbols[i]
+}
 
-
-
-which(rownames(counts_gene_symbol)%in%ensembl_symbols)
-row.names(counts_gene_symbol[ensembl_symbols,]) <- gene_symbols
-
-rownames(y$counts[ensembl_symbols,]) <- gene_symbols
-
+y$counts <- counts_gene_symbol
 
 # compute norm_factors
 normfac <- calcNormFactors(y, method = "TMM")
@@ -161,23 +156,23 @@ fit.eb <- eBayes(fit2)
 ##### 1. non-tol vs tol-1
 ########################################
 allGenesGroup1<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=1)
-DEgenesGroup1<-getDEgenes(allGenesGroup1,0.05,1)
+DEgenesGroup1<-getDEgenes(allGenesGroup1,0.05,2)
 dim(DEgenesGroup1)
-##3
+##35
 
 ########################################
 ##### 2. non-tol vs tol-2
 ########################################
 allGenesGroup2<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=2)
-DEgenesGroup2<-getDEgenes(allGenesGroup2,0.05,1)
+DEgenesGroup2<-getDEgenes(allGenesGroup2,0.05,2)
 dim(DEgenesGroup2)
-##0
+##1
 
 ########################################
 ##### 3. tol-1 vs tol-2
 ########################################
 allGenesGroup3<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=3)
-DEgenesGroup3<-getDEgenes(allGenesGroup3,0.05,1)
+DEgenesGroup3<-getDEgenes(allGenesGroup3,0.05,2)
 dim(DEgenesGroup3)
 ##0
 
@@ -188,7 +183,7 @@ dim(DEgenesGroup3)
 ##### All DE genes #####
 allDEgenes<-unique(c(rownames(DEgenesGroup1),rownames(DEgenesGroup2),rownames(DEgenesGroup3)))
 length(allDEgenes)
-##5738
+##36
 
 
 ######################################################################
@@ -198,67 +193,12 @@ length(allDEgenes)
 wantedColors<-c(nodiffall="#FFFFFF80",diffall="indianred1")
 
 ##### Triwise plots
-# colsSPA<-grep("A1_|A3_|A4_|A5_|A6_|A7_",colnames(expTable))
-# colsRA<-grep("A9_|A11_|A12_",colnames(expTable))
-# colsHealthy<-grep("A13_|A14_|A15_|A16_",colnames(expTable))
+non_tol_mean<-apply(expTable[,as.numeric(which(design[,1]==1))],1,mean)
+tol1_mean<-apply(expTable[,as.numeric(which(design[,2]==1))],1,mean)
+tol2_mean<-apply(expTable[,as.numeric(which(design[,3]==1))],1,mean)
 
-# for liver:
-# cDC1_mean<-apply(expTable[,1:3],1,mean)
-# cDC2_mean<-apply(expTable[,4:7],1,mean)
-# mac_mean<-apply(expTable[,8:10],1,mean)
-
-# # for spleen :
-# cDC1_mean<-apply(expTable[,1:2],1,mean)
-# cDC2_mean<-apply(expTable[,3:4],1,mean)
-# mac_mean<-apply(expTable[,5:6],1,mean)
-
-# # for thymus :
-# cDC1_mean<-apply(expTable[,1:4],1,mean)
-# cDC2_mean<-apply(expTable[,5:8],1,mean)
-# mac_mean<-apply(expTable[,9:12],1,mean)
-
-# # for lung mac1 :
-# cDC1_mean<-apply(expTable[,1:3],1,mean)
-# cDC2_mean<-apply(expTable[,4:6],1,mean)
-# mac_mean<-apply(expTable[,7:8],1,mean)
-
-# # for lung mac2 :
-# cDC1_mean<-apply(expTable[,1:3],1,mean)
-# cDC2_mean<-apply(expTable[,4:6],1,mean)
-# mac_mean<-apply(expTable[,7:8],1,mean)
-
-# # for lung mac1 and 2 :
-# cDC1_mean<-apply(expTable[,1:3],1,mean)
-# cDC2_mean<-apply(expTable[,4:6],1,mean)
-# mac_mean<-apply(expTable[,7:10],1,mean)
-
-# for all organs :
-cDC1_mean<-apply(expTable[,1:12],1,mean)
-cDC2_mean<-apply(expTable[,13:25],1,mean)
-mac_mean<-apply(expTable[,26:38],1,mean)
-
-expTable_mean<-cbind(cDC1_mean,cDC2_mean,mac_mean)
-
-# for liver:
-#colnames(expTable_mean)<-c('Liver_cDC1','Liver_cDC2','Liver_macrophage')
-
-# # for spleen :
-# colnames(expTable_mean)<-c('Spleen_cDC1','Spleen_cDC2','Spleen_macrophage')
-
-# # for thymus :
-# colnames(expTable_mean)<-c('Thymus_cDC1','Thymus_cDC2','Thymus_macrophage')
-
-# # for lung mac1 :
-# colnames(expTable_mean)<-c('Lung_cDC1','Lung_cDC2','Lung_macrophage_1')
-
-# # for lung mac2 :
-# colnames(expTable_mean)<-c('Lung_cDC1','Lung_cDC2','Lung_macrophage_2')
-
-# # for lung mac1 and 2 :
-# colnames(expTable_mean)<-c('Lung_cDC1','Lung_cDC2','Lung_macrophage_1_and_2')
-
-# for all organs :
-colnames(expTable_mean)<-c('All_cDC1','All_cDC2','All_macrophages')
+expTable_mean<-cbind(non_tol_mean, tol1_mean, tol2_mean)
+colnames(expTable_mean)<-c('Non_tol','Primary_tol','Secondary_tol')
 
 ######################################################################
 ########## TRIWISE PLOTS
