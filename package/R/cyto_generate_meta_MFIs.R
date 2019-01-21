@@ -12,7 +12,8 @@
 #'
 #' @examples
 #' pctgs <- generate_pctgs(recip_names, fsom, pdf_name = "my_pdf.pdf", fcs_dir)
-generate_meta_MFIs <- function(recip_names, fsom, cols_to_use){
+generate_meta_MFIs <- function(recip_names, fsom, cols_to_use,
+                               min_ref, max_ref, files2rescale){
   MFIs <- lapply(cols_to_use, function(x){
     matrix(
       NA,
@@ -40,6 +41,15 @@ generate_meta_MFIs <- function(recip_names, fsom, cols_to_use){
       ff,
       tlist
     )
+
+    if(names(recip_names[i]) %in% files2rescale){
+      for (marker in colnames(exprs(ff_t))[c(3,17,28:62,71)]){
+        exprs(ff_t)[, marker] <-
+          scales::rescale(exprs(ff_t)[, marker],
+                          to = c(min_ref[marker], max_ref[marker]))
+      }
+    }
+
     fsom_tmp <- FlowSOM::NewData(fsom$FlowSOM, ff_t)
 
     mfis_tmp <- FlowSOM::MetaclusterMFIs(list(FlowSOM = fsom_tmp,
