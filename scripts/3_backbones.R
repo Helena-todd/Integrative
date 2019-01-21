@@ -260,6 +260,9 @@ identify_fsom_cellPopulations(fsom = fsom_rdn,
 
 
 
+
+
+
 ##############################################
 ####    backbone on donors + all recip    ####
 ##############################################
@@ -398,6 +401,44 @@ mfis_rd <- lapply(mfis_rd,function(x){
 })
 names(mfis_rd) <- funct_marks
 
+m41BB <- mfis_rd[[1]]
+m41BB <- merge(m41BB, samp_rd, by = "row.names")
+barplot(m41BB[,2], col = m41BB$DATEOFCYTOFEXPERIMENT) # all the high ones are from the same day
+days <- levels(as.factor(m41BB$DATEOFCYTOFEXPERIMENT))
+barplot(m41BB[which(m41BB$DATEOFCYTOFEXPERIMENT==days[1]),2],
+        col = c("red","green","blue")[m41BB$GROUP[which(m41BB$DATEOFCYTOFEXPERIMENT==days[1])]])
+
+png("~/Documents/VIB/Projects/Integrative_Paris/Integrative/distrib_patients.png")
+barplot(pctgs_cor[,2], col = c("red","blue","green")[pctgs_cor$GROUP])
+
+png("~/Documents/VIB/Projects/Integrative_Paris/Integrative/metaclust_1_41BB.png",
+    width = 4000,
+    height = 1000)
+par(cex.lab = 2.5, mar = c(4.1,5.1,2.1,2.1))
+layout(matrix(1:7, nrow=1, byrow = TRUE))
+for(batch in seq_along(days)){
+  boxplot(m41BB$MC1[which(m41BB$DATEOFCYTOFEXPERIMENT==days[batch])]~
+            m41BB$GROUP[which(m41BB$DATEOFCYTOFEXPERIMENT==days[batch])],
+          col= c("red","green","blue"))
+}
+# plot.new()
+# legend("center",legend=levels(pctgs_cor$GROUP), col=c("red","green","blue"),
+#        pch=19, cex=3)
+dev.off()
+
+
+boxplot(m41BB$MC1[which(m41BB$DATEOFCYTOFEXPERIMENT==days[1])]~
+          m41BB$GROUP[which(m41BB$DATEOFCYTOFEXPERIMENT==days[1])],
+        col= c("red","green","blue"))
+boxplot(m41BB$MC1[which(m41BB$DATEOFCYTOFEXPERIMENT==days[2])]~
+          m41BB$GROUP[which(m41BB$DATEOFCYTOFEXPERIMENT==days[2])],
+        col= c("red","green","blue"))
+
+
+
+
+
+
 # fsom with metaclusters instead of clusters:
 set.seed(1)
 fsom_meta_rd <- fsom2fsom_meta(fsom = fsom_rd, colsToUse = markersToPlot,
@@ -435,6 +476,16 @@ strange_normal <- rep("Normal", length(rownames(samp_rd)))
 strange_normal[which(rownames(samp_rd) %in% apart)] <- "Strange"
 PlotPies(fsom_meta_rd$FlowSOM, cellTypes = strange_normal[ff_agg_rd@exprs[,"File"]])
 
+PlotPies(fsom_meta_rd$FlowSOM, cellTypes = group[ff_agg_rd@exprs[,"File"]])
+
+orig_pctgs_2 <- table(strange_normal[ff_agg_rd@exprs[,"File"]])/sum(table(strange_normal[ff_agg_rd@exprs[,"File"]]))
+df1 <- df <- data.frame(
+  group = names(orig_pctgs_2),
+  value = as.numeric(orig_pctgs_2)
+)
+
+plot_pie(df1, c("white", "red"))
+
 
 ### Plot pctgs' PCA:
 pca <- prcomp(pctgs_meta_rd)
@@ -460,15 +511,84 @@ for (i in names(table(samp_rd$COUPLENUMBER))){
 }
 
 list_couples <- names(table(samp_rd$COUPLENUMBER))
-names(distances) = samp_rd$GROUP[which(samp_rd$COUPLENUMBER %in% list_couples)][1:34]
-names(distances)[which(names(distances)=="non_tolerant")] <- "red"
-names(distances)[which(names(distances)=="primary_tolerant")] <- "green"
-names(distances)[which(names(distances)=="secondary_tolerant")] <- "blue"
-sorted <- sort(distances)
-plot(sorted, col = names(sorted), pch=19,
-     main = "Distance between donor and recipient from same couple")
+names(distances) <- paste0("couple_",samp_rd$COUPLENUMBER[which(samp_rd$COUPLENUMBER %in% list_couples)][1:34])
+dis_colors <- c("red","green","blue")[samp_rd$GROUP[which(samp_rd$COUPLENUMBER %in% list_couples)][1:34]]
+
+age <- samp_rd$DOB
+age <- lapply(strsplit(as.character(samp_rd$DOB), "-"), function(day){
+  day[1]
+})
+samp_rd <- samp_rd %>% mutate(AGE = round(as.numeric(unlist(age)), digits = -1))
+
+dis_colors <- c("blue","green","yellow","orange","red")[as.factor(samp_rd$AGE[which(samp_rd$COUPLENUMBER %in% list_couples)][1:34])]
+order_dis <- order(distances)
+
+plot(distances[order_dis], col = dis_colors[order_dis], pch=19,
+     main = "Distance between donor and recipient from same couple",
+     ylab = "Distance D/R", xaxt = "n", xlab = "")
+axis(1, at=1:34, labels=FALSE)
+text(x=1:34, y=par()$usr[3]-0.1*(par()$usr[4]-par()$usr[3]),
+     labels=names(distances[order_dis]), srt=45, adj=1, xpd=TRUE, cex = .7)
 legend("topleft", c("non_tolerant","primary_tolerant","secondary_tolerant"),
        col = c("red","green","blue"), pch = 19)
+
+legend("topleft", names(table(samp_rd$AGE)),
+       col = c("blue","green","yellow","orange","red","pink"), pch=19)
+
+
+
+## correlations between donors and recips :
+pctgs_cor <- merge(data.frame(pctgs_meta_rd), samp_rd, by="row.names")
+pctgs_corD <- pctgs_cor[grep(pattern = "D", pctgs_cor$Row.names),] %>%
+  arrange(COUPLENUMBER)
+pctgs_corR <- pctgs_cor[grep(pattern = "R", pctgs_cor$Row.names),]%>%
+  arrange(COUPLENUMBER)
+
+correlations <- sapply(seq_len(nrow(pctgs_corD)), function(i){
+  cor(as.numeric(pctgs_corD[i, 2:37]),
+      as.numeric(pctgs_corR[i, 2:37]))
+})
+
+correlations <- 1-correlations # to compare it to the distances
+
+names(correlations) <- paste0("couple_",pctgs_corD$COUPLENUMBER)
+cor_colors <- c("red","green","blue")[pctgs_corD$GROUP]
+order_cor <- order(correlations)
+plot(correlations[order_cor], col = cor_colors[order_cor], pch=19,
+     main = "Correlation between donor and recipient from same couple",
+     ylab = "1 - Correlation D/R", xaxt = "n", xlab ="")
+axis(1, at=1:34, labels=FALSE)
+text(x=1:34, y=par()$usr[3]-0.1*(par()$usr[4]-par()$usr[3]),
+     labels=names(correlations[order_cor]), srt=45, adj=1, xpd=TRUE, cex = .7)
+legend("topleft", c("non_tolerant","primary_tolerant","secondary_tolerant"),
+       col = c("red","green","blue"), pch = 19)
+
+
+
+
+#Distribution of patients in the 36 metaclusters?
+png("~/Documents/VIB/Projects/Integrative_Paris/Integrative/distrib_patients.png")
+barplot(pctgs_cor[,2], col = c("red","blue","green")[pctgs_cor$GROUP])
+
+png("~/Documents/VIB/Projects/Integrative_Paris/Integrative/distrib_patients.png",
+    width = 9000,
+    height = 4500)
+par(cex.lab = 2.5, mar = c(4.1,5.1,2.1,2.1))
+layout(matrix(1:40, nrow=8, byrow = TRUE))
+for(metacluster in 2:37){
+  print(paste0("Plotting metacluster ",metacluster-1))
+  barplot(pctgs_cor[,metacluster], col = c("red","blue","green")[pctgs_cor$GROUP],
+          main = new_labels[metacluster-1])
+}
+plot.new()
+legend("center",legend=levels(pctgs_cor$GROUP), col=c("red","green","blue"),
+       pch=19, cex=3)
+dev.off()
+
+
+
+
+
 
 ###############################################
 ####   backbone on D&R tolerant 1&2 only   ####
