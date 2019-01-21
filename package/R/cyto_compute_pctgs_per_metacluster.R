@@ -7,13 +7,17 @@
 #' @param fsom FlowSOM object
 #' @param pdf_name choose a name for the exported pdf which will contain one fsom map per patient
 #' @param fcs_dir path to the directory containing fcs files, corresponding to recip_names
+#' @param min_ref vector of minimum values to use for rescaling
+#' @param max_ref vector of maximum values to use for rescaling
+#' @param files2rescale vector of names of the files to rescale
 #'
 #' @return a pctgs matrix and pdf containing one map per patient
 #' @export
 #'
 #' @examples
 #' pctgs <- generate_pctgs(recip_names, fsom, pdf_name = "my_pdf.pdf", fcs_dir)
-generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir){
+generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir,
+                           min_ref, max_ref, files2rescale){
   pctgs <- matrix(
     0,
     length(recip_names),
@@ -39,6 +43,15 @@ generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir){
       ff,
       tlist
     )
+
+    if(names(recip_names[i]) %in% files2rescale){
+      for (marker in colnames(exprs(ff_t))[c(3,17,28:62,71)]){
+        exprs(ff_t)[, marker] <-
+          scales::rescale(exprs(ff_t)[, marker],
+                          to = c(min_ref[marker], max_ref[marker]))
+      }
+    }
+
     fsom_tmp <- FlowSOM::NewData(fsom$FlowSOM, ff_t)
 
     mat_annot <- exprs(ff_t)
