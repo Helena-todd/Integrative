@@ -3,15 +3,18 @@ library(openxlsx)
 library(metabolomics)
 library(BioGVHD)
 library(tidyverse)
+library(data.table)
 
 
 #################################
 ########  PREPROCESSING  ########
 #################################
 
-info <- extract_info_metabo(metadata_file = samp_recip,
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_RNAseq_14:01:19/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+
+info <- extract_info_metabo(metadata_file = samp_rd,
                                 metabo_file = "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/Metabolomic local cohort Saint-Louis_filtered.xlsx")
-recip_meta <- info$subset_meta
+rd_meta <- info$subset_meta
 meta_metabo <- info$meta_metabo
 data_metabolites <- info$data_metabolites
 
@@ -19,7 +22,7 @@ data_metabolites <- info$data_metabolites
 
 data_metabolites <- data_metabolites[,-which((meta_metabo[2,]=="Xenobiotics")&(meta_metabo[1,]=="Drug"))] # rm drug xenobiotics
 
-colsums <- by(data_metabolites, recip_meta$GROUP, # identify metabolites <50% in each group
+colsums <- by(data_metabolites, rd_meta$GROUP, # identify metabolites <50% in each group
               FUN = function(x) {colSums(is.na(x)) >= nrow(x)*0.5})
 high_na <- which(colsums[[1]]&colsums[[2]]&colsums[[3]]) # identify metabolites <50% in all groups
 data_metabo <- data_metabolites[ , -high_na]
@@ -40,7 +43,7 @@ data_metabo <- apply(data_metabo,2,as.numeric)
 rownames(data_metabo) <- rnames
 
 # logtransform and normalise:
-mat2use <- merge.data.frame(as.data.frame(recip_meta[,2], row.names = rownames(recip_meta)),
+mat2use <- merge.data.frame(as.data.frame(rd_meta[,2], row.names = rownames(rd_meta)),
                             data_metabo, by = "row.names") %>%
   tibble::column_to_rownames(var="Row.names")
 
@@ -50,14 +53,16 @@ colnames(normdata$output) <- colnames(logdata$output)
 norm_data <- normdata$output
 
 # merge dataframes:
-big_mat <- merge.data.frame(normdata$output, recip_meta, by = "row.names") %>%
+big_mat <- merge.data.frame(normdata$output, rd_meta, by = "row.names") %>%
   tibble::column_to_rownames("Row.names")
 
-save(norm_data, file="norm_data.RData")
+logdata <- logdata$output
+save(logdata, file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/logdata.RData")
+save(norm_data, file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/norm_data.RData")
 meta_metabo <- meta_metabo[,which(as.character(meta_metabo[3,])%in%colnames(norm_data))] # only selected metabolites
-save(meta_metabo, file="meta_metabo.RData")
-save(big_mat, file="big_mat.RData")
-save(recip_meta, file="recip_meta.RData")
+save(meta_metabo, file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/meta_metabo.RData")
+save(big_mat, file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/big_mat.RData")
+save(rd_meta, file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/rd_meta.RData")
 
 
 
@@ -208,3 +213,107 @@ subpaths_tol <- subpaths_annot[which(subpaths_annot$GROUP!="non_tolerant"),]
 subpaths_tol$GROUP <- as.factor(as.character(subpaths_tol$GROUP))
 rf_metabo <- randomForest::randomForest(GROUP~., subpaths_tol)
 rf_metabo
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+###############################################################################
+###############################################################################
+##################     ANALYSIS ON DONORS AND RECIPIENTS     ##################
+###############################################################################
+###############################################################################
+
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/logdata.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/meta_metabo.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/big_mat.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/rd_meta.RData")
+
+### Look at the subpathways instead of metabolites
+data_metabo <- as.data.frame(logdata[,-1])
+meta_metabo <- meta_metabo[,which(as.character(meta_metabo[3,])%in%colnames(data_metabo))]
+data_metabo <- data_metabo[,which(colnames(data_metabo)%in%as.character(meta_metabo[3,]))]
+
+t_data_metabo <- t(data_metabo)
+subpath_info <- as.character(meta_metabo[1,])
+data_meta <- as.data.table(t_data_metabo)
+binded <- cbind(data_meta, subpath_info)
+
+subpaths <- binded[,lapply(.SD, mean), by=subpath_info]
+subpaths <- as.data.frame(subpaths) %>% column_to_rownames("subpath_info")
+subpaths <- as.data.frame(t(subpaths))
+
+# I add the group and couple nb info in 2 extra columns:
+sub_data <- cbind(logdata[,1], subpaths)
+colnames(sub_data)[1] <- "group"
+sub_data <- cbind(big_mat$COUPLENUMBER, sub_data)
+colnames(sub_data)[1] <- "couplenb"
+
+save(sub_data, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/sub_data.RData")
+
+
+### paired t-tests:
+sub_D <- sub_data[grep(pattern = "D", rownames(sub_data)),]
+sub_D <- sub_D[order(sub_D$couplenb),]
+
+sub_R <- sub_data[grep(pattern = "R", rownames(sub_data)),]
+sub_R <- sub_R[order(sub_R$couplenb),]
+
+ttests <- function(mat_D, mat_R, group){
+  mat_D_gr <- mat_D[which(mat_D$group==group),]
+  mat_R_gr <- mat_R[which(mat_R$group==group),]
+
+  ttests_gr <- sapply(3:ncol(mat_D), function(subp){
+    paired_ttest <- t.test(as.numeric(mat_D_gr[, subp]),
+                           as.numeric(mat_R_gr[, subp]), paired = T)
+    pval <- paired_ttest$p.value
+    names(pval) <- colnames(sub_D)[subp]
+    pval
+  })
+  return(ttests_gr)
+}
+
+ttests_NT <- ttests(sub_D, sub_R, "Non_Tolerant")
+DE_NT <- ttests_NT[which(ttests_NT <0.01)]
+table_NT <- data.frame(as.numeric(sort(DE_NT)))
+rownames(table_NT) <- names(sort(DE_NT))
+colnames(table_NT) <- "pvalue"
+table_NT
+length(DE_NT)
+# 30
+
+ttests_1T <- ttests(sub_D, sub_R, "Primary_tolerant")
+DE_1T <- ttests_1T[which(ttests_1T <0.01)]
+table_1T <- data.frame(as.numeric(sort(DE_1T)))
+rownames(table_1T) <- names(sort(DE_1T))
+colnames(table_1T) <- "pvalue"
+table_1T
+length(DE_1T)
+# 2
+
+ttests_2T <- ttests(sub_D, sub_R, "Secondary_tolerant")
+DE_2T <- ttests_2T[which(ttests_2T <0.01)]
+table_2T <- data.frame(as.numeric(sort(DE_2T)))
+rownames(table_2T) <- names(sort(DE_2T))
+colnames(table_2T) <- "pvalue"
+table_2T
+length(DE_2T)
+# 1
+
+
+
+
+
+### Normalise? :
+subpaths_norm <- apply(subpaths, 2, scale)
+rownames(subpaths_norm) <- rownames(subpaths)
