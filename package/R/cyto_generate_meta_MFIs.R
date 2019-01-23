@@ -6,6 +6,9 @@
 #' @param recip_names vector containing the names of recipients' fcs files
 #' @param fsom FlowSOM object
 #' @param cols_to_use functional markers for which to extract MFIs per metacluster per patient
+#' @param min_ref vector of minimal values to use for rescaling
+#' @param max_ref vector of maximal values to use for rescaling
+#' @param files2rescale vector of names of the files that need to be rescaled
 #'
 #' @return a list of MFIs matrices for each column to use
 #' @export
