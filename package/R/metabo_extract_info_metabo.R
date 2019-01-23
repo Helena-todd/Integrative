@@ -13,6 +13,8 @@
 
 extract_info_metabo <- function(metadata_file, metabo_file){
   patient_meta <- metadata_file[which(!is.na(metadata_file$METABONAME)),]
+  patient_couples <- patient_meta$COUPLENUMBER[which(duplicated(patient_meta$COUPLENUMBER)==TRUE)]
+  patient_meta <- patient_meta[which(patient_meta$COUPLENUMBER %in% patient_couples),]
   rownames(patient_meta) <- patient_meta$METABONAME
 
   ## strange numbers after row 390, I only read 80 first rows (corresponding to patients)
