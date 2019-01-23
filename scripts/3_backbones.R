@@ -286,17 +286,17 @@ rd_names <- rd_names[which(names(rd_names) %in% samp_rd$Id.Cryostem.R)]
 ######## aggregate flowframes of all R and D ########
 #####################################################
 
-ff_agg_rd <- fcs_to_agg(fcs_dir= fcs_dir,
-                         fcs_names= rd_names,
-                         seed = 1,
-                         cTotal = 10000*length(rd_names),
-                         output_name = "aggregate_rd.fcs")
-
-prettyMarkerNames <- ff_agg_rd@parameters@data[,"desc"] #change names of markers in flowSOM
-prettyMarkerNames <- gsub(".*_", "", prettyMarkerNames)
-prettyMarkerNames[is.na(prettyMarkerNames)] <-
-  ff_agg_rd@parameters@data[,"name"][is.na(prettyMarkerNames)]
-names(prettyMarkerNames) <- colnames(ff_agg_rd)
+# ff_agg_rd <- fcs_to_agg(fcs_dir= fcs_dir,
+#                          fcs_names= rd_names,
+#                          seed = 1,
+#                          cTotal = 10000*length(rd_names),
+#                          output_name = "aggregate_rd.fcs")
+#
+# prettyMarkerNames <- ff_agg_rd@parameters@data[,"desc"] #change names of markers in flowSOM
+# prettyMarkerNames <- gsub(".*_", "", prettyMarkerNames)
+# prettyMarkerNames[is.na(prettyMarkerNames)] <-
+#   ff_agg_rd@parameters@data[,"name"][is.na(prettyMarkerNames)]
+# names(prettyMarkerNames) <- colnames(ff_agg_rd)
 
 # Values of 2 first donors were too high compared to the others -> rescale
 files2rescale <- which(names(rd_names) %in% c("D1073", "D1502"))
@@ -307,19 +307,19 @@ min_ref <- apply(ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==ref_file),c(3,1
 max_ref <- apply(ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==ref_file),c(3,17,28:62,71)],2,
                  function(x) quantile(x, 0.999))
 
-for (file_nb in files2rescale){
-  for (marker in colnames(ff_agg_rd@exprs)[c(3,17,28:62,71)]){
-    ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==file_nb), marker] <-
-      scales::rescale(ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==file_nb), marker],
-                      to = c(min_ref[marker], max_ref[marker]))
-  }
-}
-# and plot results after scaling:
-plot_aggregate_markers(patient_names = rd_names, samp_patients=samp_rd, color_by = "DATEOFCYTOFEXPERIMENT",
-                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_rescaled_date_68rd.png",
-                       ff_agg = ff_agg_rd )
-
-save(ff_agg_rd, file = "ff_agg_rd.RData")
+# for (file_nb in files2rescale){
+#   for (marker in colnames(ff_agg_rd@exprs)[c(3,17,28:62,71)]){
+#     ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==file_nb), marker] <-
+#       scales::rescale(ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==file_nb), marker],
+#                       to = c(min_ref[marker], max_ref[marker]))
+#   }
+# }
+# # and plot results after scaling:
+# plot_aggregate_markers(patient_names = rd_names, samp_patients=samp_rd, color_by = "DATEOFCYTOFEXPERIMENT",
+#                        prettyMarkerNames, pheno_marks, png_name= "Aggregate_rescaled_date_68rd.png",
+#                        ff_agg = ff_agg_rd )
+#
+# save(ff_agg_rd, file = "ff_agg_rd.RData")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/ff_agg_rd.RData")
 
 ### markersToPlot
@@ -335,30 +335,30 @@ names(pheno_marks) <- markersToPlot
 colsToUse<-markersToPlot
 
 #### FlowSOM ####
-seed <- 1
-fsom_rd <- FlowSOM(ff_agg_rd,
-                    colsToUse = colsToUse,
-                    scale = FALSE,
-                    xdim = 15, ydim = 15, # larger grid because ++ markers
-                    nClus = 30,
-                    seed = seed)
-PlotStars(UpdateNodeSize(fsom_rd$FlowSOM, maxNodeSize = 8, reset = TRUE),
-          markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD11a","CD16","CD127","CD3","CD4","CD45RA","CD8a","HLADR","CD19",
-                                                                           "CD38","CD161","CCR7","CD27","CCR4","CCR5","CD5","CXCR3","Fas",
-                                                                           "foxP3","CD24","CXCR5"))],
-          view = "MST")
-
-PlotNumbers(UpdateNodeSize(fsom_rd$FlowSOM, maxNodeSize = 8, reset = TRUE),
-            fontSize = .5, view = "grid")
+# seed <- 1
+# fsom_rd <- FlowSOM(ff_agg_rd,
+#                     colsToUse = colsToUse,
+#                     scale = FALSE,
+#                     xdim = 15, ydim = 15, # larger grid because ++ markers
+#                     nClus = 30,
+#                     seed = seed)
+# PlotStars(UpdateNodeSize(fsom_rd$FlowSOM, maxNodeSize = 8, reset = TRUE),
+#           markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD11a","CD16","CD127","CD3","CD4","CD45RA","CD8a","HLADR","CD19",
+#                                                                            "CD38","CD161","CCR7","CD27","CCR4","CCR5","CD5","CXCR3","Fas",
+#                                                                            "foxP3","CD24","CXCR5"))],
+#           view = "MST")
+#
+# PlotNumbers(UpdateNodeSize(fsom_rd$FlowSOM, maxNodeSize = 8, reset = TRUE),
+#             fontSize = .5, view = "grid")
 
 save(fsom_rd, file = "fsom_rd.RData")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_rd.RData")
 
 # identify cell type for each fsom cluster
-identify_fsom_cellPopulations(fsom = fsom_rd,
-                              prettyMarkerNames, cellTypes,
-                              pdf_name = "identify_clusters_rd_tree_view.pdf",
-                              view="MST")
+# identify_fsom_cellPopulations(fsom = fsom_rd,
+#                               prettyMarkerNames, cellTypes,
+#                               pdf_name = "identify_clusters_rd_tree_view.pdf",
+#                               view="MST")
 
 # manual annotation with Laetitia's labels:
 bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_14:01:19/Pop ID Backbone R&Dall.xlsx")
@@ -368,7 +368,10 @@ pctgs_rd <- generate_pctgs(
   fsom = fsom_rd,
   pdf_name = "Plot_Stars_68rd.pdf",
   fcs_dir = fcs_dir,
-  output_dir = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/"
+  output_dir = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/",
+  min_ref = min_ref,
+  max_ref = max_ref,
+  files2rescale = c("D1073", "D1502")
 )
 #pctgs <- t(apply(counts, 1, function(x){x/sum(x)}))
 rownames(pctgs_rd) <- names(rownames(pctgs_rd))
@@ -379,6 +382,7 @@ bb_rd_ordered <- bb_rd[order(bb_rd$Cluster),]
 fsom_rd$metaclustering <- bb_rd_ordered$Metacluster
 pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclustering, sum)}))
 save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd.RData")
 
 #generate MFIs
 markers <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/PANEL CYTOF corrigé 07.2018.xlsx",
@@ -390,7 +394,9 @@ markersToPlot <- names(prettyMarkerNames)[which(prettyMarkerNames%in%funct_marks
 names(funct_marks) <- markersToPlot
 
 
-mfis_rd <- generate_meta_MFIs(rd_names, fsom_rd, cols_to_use = markersToPlot)
+mfis_rd <- generate_meta_MFIs(rd_names, fsom_rd, cols_to_use = markersToPlot,
+                              min_ref = min_ref, max_ref = max_ref,
+                              files2rescale = c("D1073", "D1502"))
 
 save(mfis_rd, file ="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/mfis_meta_rd.RData")
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/mfis_meta_rd.RData")
@@ -435,8 +441,14 @@ boxplot(m41BB$MC1[which(m41BB$DATEOFCYTOFEXPERIMENT==days[2])]~
         col= c("red","green","blue"))
 
 
+## generate and plot the expression of the functional markers in all the
+## patient's cells, per metacluster:
 
-
+metacluster_values <- extract_funct_markers(rd_names, fsom_rd, cols_to_use,
+                                            min_ref, max_ref, files2rescale = c("D1073", "D1502"),
+                                            samp_patients = samp_rd)
+save(metaclust_values, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/metaclust_funct_values.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/metaclust_funct_values.RData")
 
 
 # fsom with metaclusters instead of clusters:
@@ -447,6 +459,9 @@ fsom_meta_rd <- fsom2fsom_meta(fsom = fsom_rd, colsToUse = markersToPlot,
 PlotStars(fsom_meta_rd$FlowSOM,
           markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD4","CD8a","CD20","IgM","CD38","CD25","CD3","CD11a","CD19"))])
 PlotNumbers(fsom_meta_rd$FlowSOM)
+
+save(fsom_meta_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd.RData")
 
 meta_rd_labels <- seq_len(nrow(fsom_meta_rd$FlowSOM$map$codes))
 new_labels <- lapply(seq_along(meta_rd_labels), function(i){
@@ -577,13 +592,22 @@ par(cex.lab = 2.5, mar = c(4.1,5.1,2.1,2.1))
 layout(matrix(1:40, nrow=8, byrow = TRUE))
 for(metacluster in 2:37){
   print(paste0("Plotting metacluster ",metacluster-1))
-  barplot(pctgs_cor[,metacluster], col = c("red","blue","green")[pctgs_cor$GROUP],
+  barplot(pctgs_cor[,metacluster], col = c("red","green","blue")[pctgs_cor$GROUP],
           main = new_labels[metacluster-1])
 }
 plot.new()
-legend("center",legend=levels(pctgs_cor$GROUP), col=c("red","green","blue"),
+legend("center",legend=levels(pctgs_cor$GROUP), col=c("red","blue","green"),
        pch=19, cex=3)
 dev.off()
+
+
+#Paired t-tests to compute the similarity matrix:
+pvals <- list()
+ttests <- sapply(seq_len(nrow(pctgs_corD)), function(i){
+  paired_ttest <- t.test(as.numeric(pctgs_corD[i, 2:37]),
+      as.numeric(pctgs_corR[i, 2:37]), paired = T)
+  pvals[[i]] <- paired_ttest$p.value
+})
 
 
 
