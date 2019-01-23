@@ -260,7 +260,7 @@ sub_data <- cbind(big_mat$COUPLENUMBER, sub_data)
 colnames(sub_data)[1] <- "couplenb"
 
 save(sub_data, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/sub_data.RData")
-
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/sub_data.RData")
 
 ### paired t-tests:
 sub_D <- sub_data[grep(pattern = "D", rownames(sub_data)),]
@@ -284,31 +284,40 @@ ttests <- function(mat_D, mat_R, group){
 }
 
 ttests_NT <- ttests(sub_D, sub_R, "Non_Tolerant")
-DE_NT <- ttests_NT[which(ttests_NT <0.01)]
+# correct for multiple tests
+ttests_NT <- p.adjust(ttests_NT, "BH")
+
+DE_NT <- ttests_NT[which(ttests_NT <0.05)]
 table_NT <- data.frame(as.numeric(sort(DE_NT)))
 rownames(table_NT) <- names(sort(DE_NT))
 colnames(table_NT) <- "pvalue"
 table_NT
 length(DE_NT)
-# 30
+# 33
 
 ttests_1T <- ttests(sub_D, sub_R, "Primary_tolerant")
-DE_1T <- ttests_1T[which(ttests_1T <0.01)]
+# correct for multiple tests
+ttests_1T <- p.adjust(ttests_1T, "BH")
+
+DE_1T <- ttests_1T[which(ttests_1T <0.05)]
 table_1T <- data.frame(as.numeric(sort(DE_1T)))
 rownames(table_1T) <- names(sort(DE_1T))
 colnames(table_1T) <- "pvalue"
 table_1T
 length(DE_1T)
-# 2
+# 0
 
 ttests_2T <- ttests(sub_D, sub_R, "Secondary_tolerant")
-DE_2T <- ttests_2T[which(ttests_2T <0.01)]
+# correct for multiple tests
+ttests_2T <- p.adjust(ttests_2T, "BH")
+
+DE_2T <- ttests_2T[which(ttests_2T <0.05)]
 table_2T <- data.frame(as.numeric(sort(DE_2T)))
 rownames(table_2T) <- names(sort(DE_2T))
 colnames(table_2T) <- "pvalue"
 table_2T
 length(DE_2T)
-# 1
+# 0
 
 
 
