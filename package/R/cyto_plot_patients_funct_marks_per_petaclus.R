@@ -18,11 +18,49 @@
 #' funct_matrices <- extract_funct_markers(recip_names, fsom, fcs_dir, cols_to_use,
 #'                                         min_ref, max_ref, files2rescale = c("D1073"))
 #'
-plot_funct_markers <- function(metaclust_values, patient_names, samp_patients){
+plot_funct_markers <- function(metaclust_values, patient_names, samp_patients,
+                               png_name){
 
 
 
-  pdf("~/Desktop/test.pdf")
+
+  require(cowplot)
+
+
+
+
+
+
+
+  for (metacluster in seq_along(metaclust_values)){
+    print(paste0("Reading in metacluster ", metacluster))
+
+    # put nicer marker names
+    colnames(metaclust_values[[metacluster]]) <- c(as.character(funct_marks),
+                                                   "patients", "batch", "group")
+
+    mylist <- lapply(colnames(metaclust_values[[metacluster]])[c(1:10)], function (marker){
+      print(paste0("Generating plot marker ", marker))
+      pplot <- ggplot(metaclust_values[[metacluster]]) +
+        geom_jitter(aes(x = patients, y = eval(as.symbol(marker)), col = as.factor(batch)),
+                    height = 0, width = 0.3, size = 0.7) + labs(y = marker)
+    })
+
+    print(paste0("Plotting grid metacluster ", metacluster))
+
+    png(paste0("~/Desktop/batch_plots/batch_metacluster_",
+               colnames(pctgs_meta_rd)[metacluster],".png"),
+        width = 6000, height = 4000)
+    print(plot_grid(plotlist= mylist, labels = as.character(funct_marks)))
+    dev.off()
+
+  }
+
+
+
+
+
+  png()
   #for (metacluster in seq_along(metaclust_values)){
     #for (marker in 1:(ncol(metaclust_values[[metacluster]])-1)){ RESTORE THE LOOP ONCE IVE TALKED TO ROBRECHT !
       ggplot(metaclust_values[[metacluster]]) +
@@ -30,25 +68,61 @@ plot_funct_markers <- function(metaclust_values, patient_names, samp_patients){
         #               y = Cd114Di)) +
         geom_jitter(aes(x = patients, y = Cd114Di, col = as.factor(batch)),
                     height = 0, width = 0.3, size = 0.7)
+      plot.new()
     ggplot(metaclust_values[[metacluster]]) +
       geom_jitter(aes(x = patients, y = Nd150Di, col = as.factor(batch)),
                   height = 0, width = 0.3, size = 0.7)
+    plot.new()
     ggplot(metaclust_values[[metacluster]]) +
       geom_jitter(aes(x = patients, y = Eu151Di, col = as.factor(batch)),
                   height = 0, width = 0.3, size = 0.7)
+    plot.new()
     ggplot(metaclust_values[[metacluster]]) +
       geom_jitter(aes(x = patients, y = Sm154Di, col = as.factor(batch)),
                   height = 0, width = 0.3, size = 0.7)
+    plot.new()
     ggplot(metaclust_values[[metacluster]]) +
       geom_jitter(aes(x = patients, y = Gd158Di, col = as.factor(batch)),
                   height = 0, width = 0.3, size = 0.7)
+    plot.new()
     ggplot(metaclust_values[[metacluster]]) +
       geom_jitter(aes(x = patients, y = Dy161Di, col = as.factor(batch)),
                   height = 0, width = 0.3, size = 0.7)
+    plot.new()
     ggplot(metaclust_values[[metacluster]]) +
       geom_jitter(aes(x = patients, y = Yb171Di, col = as.factor(batch)),
                   height = 0, width = 0.3, size = 0.7)
+    dev.off()
 
+
+    ggplot(metaclust_values[[metacluster]]) +
+      #geom_point(aes(x = patients,#colnames(metaclust_values[[metacluster]])[marker],
+      #               y = Cd114Di)) +
+      geom_jitter(aes(x = patients, y = Cd114Di, col = as.factor(group)),
+                  height = 0, width = 0.3, size = 0.7)
+    ggplot(metaclust_values[[metacluster]]) +
+      geom_jitter(aes(x = patients, y = Nd150Di, col = as.factor(group)),
+                  height = 0, width = 0.3, size = 0.7)
+    ggplot(metaclust_values[[metacluster]]) +
+      geom_jitter(aes(x = patients, y = Eu151Di, col = as.factor(group)),
+                  height = 0, width = 0.3, size = 0.7)
+    ggplot(metaclust_values[[metacluster]]) +
+      geom_jitter(aes(x = patients, y = Sm154Di, col = as.factor(group)),
+                  height = 0, width = 0.3, size = 0.7)
+    ggplot(metaclust_values[[metacluster]]) +
+      geom_jitter(aes(x = patients, y = Gd158Di, col = as.factor(group)),
+                  height = 0, width = 0.3, size = 0.7)
+    ggplot(metaclust_values[[metacluster]]) +
+      geom_jitter(aes(x = patients, y = Dy161Di, col = as.factor(group)),
+                  height = 0, width = 0.3, size = 0.7)
+    ggplot(metaclust_values[[metacluster]]) +
+      geom_jitter(aes(x = patients, y = Yb171Di, col = as.factor(group)),
+                  height = 0, width = 0.3, size = 0.7)
+
+
+    pat_names <- patient_names[metaclust_values[[metacluster]]$patients]
+    pat_names[grep("R", pat_names)] <- "recip"
+    pat_names[grep("D", pat_names)] <- "donor"
 
     ggplot(metaclust_values[[metacluster]]) +
       #geom_point(aes(x = patients,#colnames(metaclust_values[[metacluster]])[marker],
