@@ -13,6 +13,8 @@ suppressPackageStartupMessages({
   library("ggraph")
   library("igraph")
   library("scales")
+  library("dendextend")
+  library("cowplot")
 })
 library(BioGVHD)
 options("scipen"=100)
@@ -384,12 +386,18 @@ pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclusteri
 save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd.RData")
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd.RData")
 
+# with Laetitia's names :
+colnames(pctgs_meta_rd) <- unlist(new_labels)
+save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_with_metaclust_labels.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_with_metaclust_labels.RData")
+
+
 #generate MFIs
 markers <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/PANEL CYTOF corrigé 07.2018.xlsx",
                      check.names = FALSE) ## excel file with info about markers
 
 ## find only functional markers
-funct_marks<-markers[which((markers[,5]==1)&(markers[,4]==0)),1]
+funct_marks<-markers[which((markers[,5]==1)),1]
 markersToPlot <- names(prettyMarkerNames)[which(prettyMarkerNames%in%funct_marks)]
 names(funct_marks) <- markersToPlot
 
@@ -444,11 +452,27 @@ boxplot(m41BB$MC1[which(m41BB$DATEOFCYTOFEXPERIMENT==days[2])]~
 ## generate and plot the expression of the functional markers in all the
 ## patient's cells, per metacluster:
 
-metacluster_values <- extract_funct_markers(rd_names, fsom_rd, cols_to_use,
+markers <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/PANEL CYTOF corrigé 07.2018.xlsx",
+                     check.names = FALSE) ## excel file with info about markers
+
+## find only functional markers
+funct_marks<-markers[which((markers[,5]==1)),1]
+markersToPlot <- names(prettyMarkerNames)[which(prettyMarkerNames%in%funct_marks)]
+names(funct_marks) <- markersToPlot
+
+metacluster_values <- extract_funct_markers(rd_names, fsom_rd, funct_marks = funct_marks,
                                             min_ref, max_ref, files2rescale = c("D1073", "D1502"),
                                             samp_patients = samp_rd)
-save(metaclust_values, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/metaclust_funct_values.RData")
+save(metacluster_values, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/metaclust_funct_values.RData")
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/metaclust_funct_values.RData")
+
+png_name <- "~/Desktop/test2.png"
+
+plot_funct_markers(metaclust_values,
+                   patient_names = rd_names,
+                   samp_patients = samp_rd, png_name = png_name)
+
+
 
 
 # fsom with metaclusters instead of clusters:
@@ -601,13 +625,138 @@ legend("center",legend=levels(pctgs_cor$GROUP), col=c("red","blue","green"),
 dev.off()
 
 
-#Paired t-tests to compute the similarity matrix:
-pvals <- list()
-ttests <- sapply(seq_len(nrow(pctgs_corD)), function(i){
-  paired_ttest <- t.test(as.numeric(pctgs_corD[i, 2:37]),
-      as.numeric(pctgs_corR[i, 2:37]), paired = T)
-  pvals[[i]] <- paired_ttest$p.value
-})
+
+
+
+### paired t.tests between D and R per group
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_with_metaclust_labels.RData")
+pctg_data <- merge(pctgs_meta_rd, samp_rd, by="row.names")
+rown <- pctg_data$Row.names
+pctg_data <- pctg_data[,c(41, 39, 2:37)]
+colnames(pctg_data)[c(1,2)] <- c("couplenb", "group")
+rownames(pctg_data) <- rown
+
+pctg_D <- pctg_data[grep(pattern = "D", rownames(pctg_data)),]
+pctg_D <- pctg_D[order(pctg_D$couplenb),]
+
+pctg_R <- pctg_data[grep(pattern = "R", rownames(pctg_data)),]
+pctg_R <- pctg_R[order(pctg_R$couplenb),]
+
+ttests <- function(mat_D, mat_R, group){
+  mat_D_gr <- mat_D[which(mat_D$group==group),]
+  mat_R_gr <- mat_R[which(mat_R$group==group),]
+
+  ttests_gr <- sapply(3:ncol(mat_D), function(pctgp){
+    paired_ttest <- t.test(as.numeric(mat_D_gr[, pctgp]),
+                           as.numeric(mat_R_gr[, pctgp]), paired = T)
+    pval <- paired_ttest$p.value
+    names(pval) <- colnames(pctg_D)[pctgp]
+    pval
+  })
+  return(ttests_gr)
+}
+
+ttests_NT <- ttests(pctg_D, pctg_R, "non_tolerant")
+# correct for multiple tests
+ttests_NT <- p.adjust(ttests_NT, "BH")
+
+DE_NT <- ttests_NT[which(ttests_NT <0.05)]
+table_NT <- data.frame(as.numeric(sort(DE_NT)))
+rownames(table_NT) <- names(sort(DE_NT))
+colnames(table_NT) <- "pvalue"
+table_NT
+length(DE_NT)
+# 18
+
+ttests_1T <- ttests(pctg_D, pctg_R, "primary_tolerant")
+# correct for multiple tests
+ttests_1T <- p.adjust(ttests_1T, "BH")
+
+DE_1T <- ttests_1T[which(ttests_1T <0.05)]
+table_1T <- data.frame(as.numeric(sort(DE_1T)))
+rownames(table_1T) <- names(sort(DE_1T))
+colnames(table_1T) <- "pvalue"
+table_1T
+length(DE_1T)
+# 0
+
+ttests_2T <- ttests(pctg_D, pctg_R, "secondary_tolerant")
+# correct for multiple tests
+ttests_2T <- p.adjust(ttests_2T, "BH")
+
+DE_2T <- ttests_2T[which(ttests_2T <0.05)]
+table_2T <- data.frame(as.numeric(sort(DE_2T)))
+rownames(table_2T) <- names(sort(DE_2T))
+colnames(table_2T) <- "pvalue"
+table_2T
+length(DE_2T)
+# 0
+
+
+### clustering on the R/D couples
+big_mat <- merge(pctgs_meta_rd, samp_rd, by = "row.names")
+big_D <- big_mat[grep("D", big_mat$Row.names),] %>%
+  arrange(COUPLENUMBER)
+big_R <- big_mat[grep("R", big_mat$Row.names),]%>%
+  arrange(COUPLENUMBER)
+
+pctg_couples <- matrix(rep(0, 108*34), nrow = 34)
+for (i in 1:nrow(big_D)){
+  d_vec <- big_D[i, 2:37]
+  r_vec <- big_R[i, 2:37]
+  both <- rbind(d_vec, r_vec)
+  means_both <- apply(both,2,mean)
+  pctg_couples[i,] <- as.numeric(c((r_vec-d_vec), means_both, abs(r_vec-d_vec)))
+}
+rownames(pctg_couples) <- paste0("couple_",big_D$COUPLENUMBER)
+
+hc <- hclust(dist(pctg_couples))
+plot(hc, col = big_D$GROUP)
+
+
+dend <- as.dendrogram(hc)
+grop<-as.numeric(big_D$GROUP)
+labels_colors(dend) <-
+  c("red","blue","green")[sort_levels_values(
+    as.numeric(grop)[order.dendrogram(dend)]
+  )]
+dend <- set(dend, "labels_cex", 0.7)
+
+plot(dend,
+     main = "Clustering on metaclusters only",
+     horiz =  F,  nodePar = list(cex = .007))
+legend("topleft", legend = c("non_tolerant","primary_tol","secondary_tol"), fill = c("red","green","blue"),cex=0.75)
+
+
+apart<- c("R690","R830","R219","R598","R2798","R836","R2589","03R","R419","R395")
+which(big_R$Row.names%in% apart)
+
+
+grop<-rep(1, 34)
+grop[which(big_R$Row.names%in% apart)] <- 2
+labels_colors(dend) <-
+  c("black", "red")[sort_levels_values(
+    as.numeric(grop)[order.dendrogram(dend)]
+  )]
+dend <- set(dend, "labels_cex", 0.7)
+
+plot(dend,
+     main = "Clustering on metaclusters only",
+     horiz =  F,  nodePar = list(cex = .007))
+legend("topleft", legend = c("normal","CMV_strange"), fill = c("black","red"),cex=0.75)
+
+
+### RF on the DR couples:
+table1 <- data.frame(cbind(pctg_D$group ,pctg_couples))
+table1[,1] <- as.factor(table1[,1])
+colnames(table1) <- c("group", paste0("substraction_",1:36), paste0("mean_",1:36),
+                      paste0("abs_",1:36))
+rf_r<-randomForest(group~., table1, ntree=5000, mtry=30)
+rf_r
+plot(rf_r, main = "Random Forest on the D/R couple CYTOF info")
+
+
+
 
 
 
