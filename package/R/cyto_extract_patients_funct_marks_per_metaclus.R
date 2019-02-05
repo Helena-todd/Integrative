@@ -7,7 +7,7 @@
 #'
 #' @param recip_names vector containing the names of recipients' fcs files
 #' @param fsom FlowSOM object
-#' @param cols_to_use functional markers for which to extract MFIs per metacluster per patient
+#' @param funct_marks functional markers for which to extract MFIs per metacluster per patient
 #' @param min_ref vector of minimal values to use for rescaling
 #' @param max_ref vector of maximal values to use for rescaling
 #' @param files2rescale vector of names of the files that need to be rescaled
@@ -17,10 +17,10 @@
 #' @export
 #'
 #' @examples
-#' funct_matrices <- extract_funct_markers(recip_names, fsom, fcs_dir, cols_to_use,
+#' funct_matrices <- extract_funct_markers(recip_names, fsom, fcs_dir, funct_marks,
 #'                                         min_ref, max_ref, files2rescale = c("D1073"))
 #'
-extract_funct_markers <- function(recip_names, fsom, cols_to_use,
+extract_funct_markers <- function(recip_names, fsom, funct_marks,
                                min_ref, max_ref, files2rescale,
                                samp_patients){
 
