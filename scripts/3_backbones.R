@@ -300,6 +300,8 @@ rd_names <- rd_names[which(names(rd_names) %in% samp_rd$Id.Cryostem.R)]
 #   ff_agg_rd@parameters@data[,"name"][is.na(prettyMarkerNames)]
 # names(prettyMarkerNames) <- colnames(ff_agg_rd)
 
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/ff_agg_rd.RData")
+
 # Values of 2 first donors were too high compared to the others -> rescale
 files2rescale <- which(names(rd_names) %in% c("D1073", "D1502"))
 ref_file <- which(names(rd_names) %in% c("D2031"))
@@ -322,7 +324,6 @@ max_ref <- apply(ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==ref_file),c(3,1
 #                        ff_agg = ff_agg_rd )
 #
 # save(ff_agg_rd, file = "ff_agg_rd.RData")
-load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/ff_agg_rd.RData")
 
 ### markersToPlot
 markers <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/PANEL CYTOF corrigé 07.2018.xlsx",
@@ -364,6 +365,8 @@ load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3
 
 # manual annotation with Laetitia's labels:
 bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_14:01:19/Pop ID Backbone R&Dall.xlsx")
+bb_rd_ordered <- bb_rd[order(bb_rd$Cluster),]
+fsom_rd$metaclustering <- bb_rd_ordered$Metacluster
 
 pctgs_rd <- generate_pctgs(
   recip_names = rd_names,
@@ -380,8 +383,6 @@ rownames(pctgs_rd) <- names(rownames(pctgs_rd))
 save(pctgs_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_rd.RData")
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_rd.RData")
 
-bb_rd_ordered <- bb_rd[order(bb_rd$Cluster),]
-fsom_rd$metaclustering <- bb_rd_ordered$Metacluster
 pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclustering, sum)}))
 save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd.RData")
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd.RData")
