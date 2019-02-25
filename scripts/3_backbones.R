@@ -321,7 +321,7 @@ max_ref <- apply(ff_agg_rd@exprs[which(ff_agg_rd@exprs[,"File"]==ref_file),c(3,1
 # # and plot results after scaling:
 # plot_aggregate_markers(patient_names = rd_names, samp_patients=samp_rd, color_by = "DATEOFCYTOFEXPERIMENT",
 #                        prettyMarkerNames, pheno_marks, png_name= "Aggregate_rescaled_date_68rd.png",
-#                        ff_agg = ff_agg_rd )
+#                        x_names = rd_names, ff_agg = ff_agg_rd )
 #
 # save(ff_agg_rd, file = "ff_agg_rd.RData")
 
