@@ -354,7 +354,7 @@ colsToUse<-markersToPlot
 # PlotNumbers(UpdateNodeSize(fsom_rd$FlowSOM, maxNodeSize = 8, reset = TRUE),
 #             fontSize = .5, view = "grid")
 
-save(fsom_rd, file = "fsom_rd.RData")
+#save(fsom_rd, file = "fsom_rd.RData")
 load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_rd.RData")
 
 # identify cell type for each fsom cluster
@@ -363,34 +363,96 @@ load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3
 #                               pdf_name = "identify_clusters_rd_tree_view.pdf",
 #                               view="MST")
 
-# manual annotation with Laetitia's labels:
-bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_14:01:19/Pop ID Backbone R&Dall.xlsx")
-bb_rd_ordered <- bb_rd[order(bb_rd$Cluster),]
-fsom_rd$metaclustering <- bb_rd_ordered$Metacluster
-
-pctgs_rd <- generate_pctgs(
-  recip_names = rd_names,
-  fsom = fsom_rd,
-  pdf_name = "Plot_Stars_68rd.pdf",
-  fcs_dir = fcs_dir,
-  output_dir = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/",
-  min_ref = min_ref,
-  max_ref = max_ref,
-  files2rescale = c("D1073", "D1502")
-)
+# pctgs_rd <- generate_pctgs(
+#   recip_names = rd_names,
+#   fsom = fsom_rd,
+#   pdf_name = "Plot_Stars_68rd.pdf",
+#   fcs_dir = fcs_dir,
+#   output_dir = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/",
+#   min_ref = min_ref,
+#   max_ref = max_ref,
+#   files2rescale = c("D1073", "D1502")
+# )
 #pctgs <- t(apply(counts, 1, function(x){x/sum(x)}))
 rownames(pctgs_rd) <- names(rownames(pctgs_rd))
 save(pctgs_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_rd.RData")
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_rd.RData")
 
+# manual annotation with Laetitia's labels:
+bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_14:01:19/Pop ID Backbone R&Dall.xlsx")
+bb_rd_ordered <- bb_rd[order(bb_rd$Cluster),]
+#bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/CYTOF/PopID_Correction_Backbone_R&Dall_7032019_Laetitia.xlsx")
+#bb_rd_ordered <- bb_rd[order(bb_rd$Cluster.FS),]
+fsom_rd$metaclustering <- bb_rd_ordered$Metacluster
+
 pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclustering, sum)}))
-save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd.RData")
-load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd.RData")
+save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_orig.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_orig.RData")
 
 # with Laetitia's names :
-colnames(pctgs_meta_rd) <- unlist(new_labels)
-save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_with_metaclust_labels.RData")
+meta_rd_labels <- seq_along(colnames(pctgs_meta_rd))
+new_labels <- lapply(seq_along(meta_rd_labels), function(i){
+  meta_rd_labels[i] <- bb_rd[which(bb_rd$Metacluster==i),2][1]
+})
+colnames(pctgs_meta_rd) <- new_labels
+
+#colnames(pctgs_meta_rd) <- names(table(bb_rd_ordered$Population.Correction.with.FlowJo))
+save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_orig_with_metaclust_labels.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_orig_with_metaclust_labels.RData")
+write.xlsx(pctgs_meta_rd, file = "~/Desktop/table_pctgs_old_metaclusters_DR.xlsx", row.names=T)
+
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_with_metaclust_labels.RData")
+head(pctgs_meta_rd[,1:5])
+write.xlsx(pctgs_meta_rd, file = "~/Desktop/table_pctgs_new_metaclusters_DR.xlsx", row.names=T)
+
+#######################################
+########  FUNCTIONAL MARKERS  #########
+#######################################
+
+#wsp_file <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/fcs/Threshold_41BB_ICOScleanedFCS.wsp"
+wsp_file <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/fcs/Threshold_functionalmarkers_ICOScleanedFCS.wsp"
+
+wsp <- openWorkspace(wsp_file)
+gates <- parseWorkspace(wsp, "All Samples", sampNloc = "sampleNode")
+
+plot(gates)
+leaf_nodes <- c("41BB+", "CD24+", "CD25+", "CD38+", "CTLA4+", "Granzyme B+",
+                "HLADR+", "ICOS+", "IL10+", "Lag3+", "OX40+", "PD1+", "Tim3+")
+leaf_nodes <- getNodes(gates)[-1]
+
+gates_matrix <- lapply(gates, function(x){
+  getIndiceMat(x, paste(leaf_nodes, collapse = "|"))
+})
+
+gates_manual <- lapply(gates_matrix, function(x){
+  FlowSOMworkshop::manual_vector(x, leaf_nodes)
+})
+names(gates_manual) <- gsub("_[0-9]*$", "", names(gates_manual))
+
+file <- names(gates_manual)[5]
+result <- list()
+for(file in names(gates_manual)){
+  ff <- read.FCS(file.path(fcs_dir, file))
+  ff <- flowCore::transform(ff,
+                            flowCore::transformList(colnames(ff)[c(3,17,28:62,71)], arcsinhTransform(b=1/5, a=0, c=0)))
+  fsom_tmp <- NewData(fsom_meta_rd$FlowSOM, ff)
+
+  cluster_assignment <- table(GetClusters(fsom_tmp), gates_manual[[file]])
+  cluster_labels <- colnames(cluster_assignment)[-1][apply(cluster_assignment[,-1], 1, which.max)]
+
+  celltype_colors <- grDevices::colorRampPalette(c("white", "#00007F",
+                                                   "blue", "#007FFF", "cyan", "#7FFF7F", "yellow", "#FF7F00", "red"))(19)
+  names(celltype_colors) <- levels(gates_manual[[file]])
+  pdf(file = paste0("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/plots/cyto_national/patient_", file,".pdf"))
+  PlotPies(fsom_tmp, gates_manual[[file]])
+  dev.off()
+  result[[file]] <- list(cluster_labels = cluster_labels,
+                         cluster_assignment = cluster_assignment)
+}
+
+PlotNumbers(fsom_tmp)
+result[[10]]$cluster_labels[151]
+t(sapply(result, function(x)x$cluster_assignment[151,]))
 
 
 #generate MFIs
@@ -485,8 +547,8 @@ PlotStars(fsom_meta_rd$FlowSOM,
           markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD4","CD8a","CD20","IgM","CD38","CD25","CD3","CD11a","CD19"))])
 PlotNumbers(fsom_meta_rd$FlowSOM)
 
-save(fsom_meta_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd.RData")
-load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd.RData")
+save(fsom_meta_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd_old.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd_old.RData")
 
 meta_rd_labels <- seq_len(nrow(fsom_meta_rd$FlowSOM$map$codes))
 new_labels <- lapply(seq_along(meta_rd_labels), function(i){
@@ -576,6 +638,38 @@ legend("topleft", names(table(samp_rd$AGE)),
        col = c("blue","green","yellow","orange","red","pink"), pch=19)
 
 
+##########
+### plotting a heatmap to see how some metaclusters are changing in the D and R:
+### (this figure is not very easy to analyse, probably useless)
+
+pheatmap::pheatmap(pctgs_meta_rd[,"B naive cells", "CD4 Naive cells",
+                                 "CD4 Treg", "CD8 naives", "CD8 Tc1 (TEMRA)"])
+
+pheatmap::pheatmap(pctgs_meta_rd[,c(2, 6, 18, 21, 24)])
+
+mat2plot <- pctgs_meta_rd[,c(2, 6, 18, 21, 24)]
+mat_info <- merge.data.frame(mat2plot, samp_rd, by = "row.names" ) %>%
+  group_by(COUPLENUMBER)
+
+values <- mat_info %>%
+  summarise_if(is.numeric, ~abs(.[1]-.[2]))
+
+couple_gr <- rep(0, nrow(values))
+non_tol <- samp_rd$COUPLENUMBER[which(samp_rd$GROUP=="non_tolerant")]
+couple_gr[which(values$COUPLENUMBER %in% non_tol)] <- "non_tol"
+tol_1 <- samp_rd$COUPLENUMBER[which(samp_rd$GROUP=="primary_tolerant")]
+couple_gr[which(values$COUPLENUMBER %in% tol_1)] <- "primary_tol"
+tol_2 <- samp_rd$COUPLENUMBER[which(samp_rd$GROUP=="secondary_tolerant")]
+couple_gr[which(values$COUPLENUMBER %in% tol_2)] <- "secondary_tol"
+
+val_ordered <- values %>% mutate(couple_gr = couple_gr) %>%
+  arrange(couple_gr) %>%
+  column_to_rownames("COUPLENUMBER")
+
+
+
+pheatmap::pheatmap(val_ordered[,1:5], cluster_rows = F, annotation_row = val_ordered[,c(6,6)])
+
 
 ## correlations between donors and recips :
 pctgs_cor <- merge(data.frame(pctgs_meta_rd), samp_rd, by="row.names")
@@ -633,7 +727,7 @@ dev.off()
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_with_metaclust_labels.RData")
 pctg_data <- merge(pctgs_meta_rd, samp_rd, by="row.names")
 rown <- pctg_data$Row.names
-pctg_data <- pctg_data[,c(41, 39, 2:37)]
+pctg_data <- pctg_data[,c("COUPLENUMBER", "GROUP", colnames(pctgs_meta_rd))]#[,c(41, 39, 2:37)]
 colnames(pctg_data)[c(1,2)] <- c("couplenb", "group")
 rownames(pctg_data) <- rown
 
