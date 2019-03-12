@@ -42,8 +42,12 @@ plot_aggregate_markers <- function(patient_names, samp_patients, color_by, prett
            pch=".",
            col = scales::hue_pal()(length(gr_levels))[factor(selected_column[ff_agg@exprs[,"File"]],
                                                              levels=gr_levels)])
-    medians <- tapply(ff_agg@exprs[,marker], ff_agg@exprs[,"File"], median)
-    lines(as.numeric(names(medians)), medians, pch = 19)
+    #medians <- tapply(ff_agg@exprs[,marker], ff_agg@exprs[,"File"], median)
+    q01 <- tapply(ff_agg@exprs[,marker], ff_agg@exprs[,"File"], quantile, 0.01)
+    q99 <- tapply(ff_agg@exprs[,marker], ff_agg@exprs[,"File"], quantile, 0.99)
+    #lines(as.numeric(names(medians)), medians, pch = 19)
+    lines(as.numeric(names(q01)), q01, pch = 19)
+    lines(as.numeric(names(q99)), q99, pch = 19)
 
   }
   plot.new()
