@@ -18,6 +18,12 @@ generate_pctgs(recip_names, fsom, pdf_name, fcs_dir, output_dir)
 
 \item{fcs_dir}{path to the directory containing fcs files, corresponding to recip_names}
 
+\item{min_ref}{vector of minimum values to use for rescaling}
+
+\item{max_ref}{vector of maximum values to use for rescaling}
+
+\item{files2rescale}{vector of names of the files to rescale}
+
 \item{recip_names}{vector containing the names of recipients' fcs files}
 
 \item{fsom}{FlowSOM object}

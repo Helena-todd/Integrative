@@ -4,7 +4,8 @@
 \alias{generate_meta_MFIs}
 \title{generate_meta_MFIs}
 \usage{
-generate_meta_MFIs(recip_names, fsom, cols_to_use)
+generate_meta_MFIs(recip_names, fsom, cols_to_use, min_ref, max_ref,
+  files2rescale)
 }
 \arguments{
 \item{recip_names}{vector containing the names of recipients' fcs files}
@@ -12,6 +13,12 @@ generate_meta_MFIs(recip_names, fsom, cols_to_use)
 \item{fsom}{FlowSOM object}
 
 \item{cols_to_use}{functional markers for which to extract MFIs per metacluster per patient}
+
+\item{min_ref}{vector of minimal values to use for rescaling}
+
+\item{max_ref}{vector of maximal values to use for rescaling}
+
+\item{files2rescale}{vector of names of the files that need to be rescaled}
 }
 \value{
 a list of MFIs matrices for each column to use
