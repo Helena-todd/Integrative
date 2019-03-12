@@ -30,7 +30,7 @@ samp_rd_all$DATEOFCYTOFEXPERIMENT <- as.Date(samp_rd_all$DATEOFCYTOFEXPERIMENT, 
 samp_rd <- samp_rd_all %>%
   dplyr::filter(DELAY_SAMPLE >= 148) %>%
   dplyr::filter(!Couple.number %in% c(32, 71)) %>%
-  arrange(HOSPITAL,DATEOFCYTOFEXPERIMENT)
+  arrange(DATEOFCYTOFEXPERIMENT)#arrange(HOSPITAL,DATEOFCYTOFEXPERIMENT)
 
 rd_names <- fcs_names[samp_rd$Id.Cryostem.R] # rearrange per hospital for the plots
 
@@ -41,7 +41,7 @@ ff_agg_rd <- fcs_to_agg(fcs_dir= fcs_dir,
                        fcs_names= rd_names,
                        seed = 1,
                        cTotal = 10000*length(rd_names),
-                       output_name = "aggregate_rd_national.fcs")
+                       output_name = "aggregate_rd_national_per_date.fcs")
 
 prettyMarkerNames <- ff_agg_rd@parameters@data[,"desc"] #change names of markers in flowSOM
 prettyMarkerNames <- gsub(".*_", "", prettyMarkerNames)
@@ -50,12 +50,153 @@ prettyMarkerNames[is.na(prettyMarkerNames)] <-
 names(prettyMarkerNames) <- colnames(ff_agg_rd)
 
 x_names <- paste0(samp_rd$Id.Cryostem.R, "_", samp_rd$DATEOFCYTOFEXPERIMENT)
-plot_aggregate_markers(patient_names = rd_names, samp_patients=samp_rd, color_by = "HOSPITAL",
-                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_nat_144rd.png",
-                       x_names = x_names ,ff_agg = ff_agg_rd )
+plot_aggregate_markers(patient_names = rd_names, samp_patients=samp_rd, color_by = "DATEOFCYTOFEXPERIMENT",
+                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_nat_date_140rd.png",
+                       x_names = samp_rd$Id.Cryostem.R ,ff_agg = ff_agg_rd )
 
 save(ff_agg_rd,
-     file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/ff_agg_rd_nat_144.RData")
+     file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/ff_agg_rd_nat_140_date.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/ff_agg_rd_nat_140RData.RData")
+
+
+#####################################
+##########   SHIFT DOWN   ###########
+#####################################
+
+ff_agg_rd_shifted <- ff_agg_rd
+
+for (file_nb in seq_len(length(table(exprs(ff_agg_rd$File))))){
+  print(paste0("Reading in file ", file_nb))
+  for (marker in colnames(ff_agg_rd@exprs)[c(3,17,28:62,71)]){
+    selection_file <- which(ff_agg_rd@exprs[,"File"]==file_nb)
+    min_file <- quantile(ff_agg_rd@exprs[selection_file, marker], 0)
+    if(min_file != 0){
+      ff_agg_rd_shifted@exprs[selection_file, marker] <-
+        ff_agg_rd@exprs[selection_file, marker] - min_file
+    }
+  }
+}
+
+plot_aggregate_markers(patient_names = rd_names, samp_patients=samp_rd, color_by = "DATEOFCYTOFEXPERIMENT",
+                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_nat_date_shifted.png",
+                       x_names = samp_rd$Id.Cryostem.R ,ff_agg = ff_agg_rd_shifted )
+
+
+
+  for (file_nb in files2rescale){
+    for (marker in "Ce142Di"){ #colnames(ff_agg_rd@exprs)[c(3,17,28:62,71)]){
+      selection_file <- which(ff_agg_rd@exprs[,"File"]==file_nb)
+      ff_agg_rd_rescaled@exprs[selection_file, marker] <-
+        (((ff_agg_rd@exprs[selection_file, marker] - min_rescale[marker])/
+            (range_rescale[marker])) * range_ref[marker] ) + min_ref[marker]
+    }
+  }
+
+  layout(matrix(1:2, nrow = 2))
+  subsample <- sample(1:sum(exprs(ff_agg_rd)[,"File"]  %in% files2rescale), 10000)
+  plot(exprs(ff_agg_rd)[which(exprs(ff_agg_rd)[,"File"]  %in% files2rescale), c("File_scattered", get_channels(ff_agg_rd, "CD11a"))],
+       pch = ".")
+  points(files2rescale, max_2rescale[, "Ce142Di"], col = "red", pch = 19)
+  points(files2rescale, min_2rescale[, "Ce142Di"], col = "red", pch = 19)
+  abline(h = min_rescale["Ce142Di"], col = "red")
+  abline(h = max_rescale["Ce142Di"], col = "red")
+
+  plot(exprs(ff_agg_rd_rescaled)[which(exprs(ff_agg_rd_rescaled)[,"File"]  %in% files2rescale), c("File_scattered", get_channels(ff_agg_rd, "CD11a"))],
+       pch = ".")
+  points(files2rescale, max_2rescale[, "Ce142Di"], col = "red", pch = 19)
+  points(files2rescale, min_2rescale[, "Ce142Di"], col = "red", pch = 19)
+  abline(h = min_rescale["Ce142Di"], col = "red")
+  abline(h = max_rescale["Ce142Di"], col = "red")
+}
+
+
+plot_aggregate_markers(patient_names = rd_names, samp_patients=samp_rd, color_by = "DATEOFCYTOFEXPERIMENT",
+                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_nat_date_rescaled.png",
+                       x_names = samp_rd$Id.Cryostem.R ,ff_agg = ff_agg_rd_rescaled )
+
+save(ff_agg_rd_rescaled,
+     file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/ff_agg_rd_nat_date_rescaled.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/ff_agg_rd_nat_date_rescaled.RData")
+
+
+
+
+############################################
+##########   RESCALE  PER  DAY   ###########
+############################################
+
+ref_files <- which(samp_rd$DATEOFCYTOFEXPERIMENT== names(table(samp_rd$DATEOFCYTOFEXPERIMENT))[1])
+
+min_refs <- plyr::ldply(ref_files, function(ref_id){
+  min_ref <- apply(ff_agg_rd@exprs[which(exprs(ff_agg_rd)[,"File"] == ref_id),c(3,17,28:62,71)],2,
+                   function(x) quantile(x, 0.01))
+})
+min_ref <- apply(min_refs, 2, median)
+
+max_refs <- plyr::ldply(ref_files, function(ref_id){
+  max_ref <- apply(ff_agg_rd@exprs[which(exprs(ff_agg_rd)[,"File"] == ref_id),c(3,17,28:62,71)],2,
+                   function(x) quantile(x, 0.99))
+})
+max_ref <- apply(max_refs, 2, median)
+
+ff_agg_rd_rescaled <- ff_agg_rd
+ff_agg_rd_rescaled_orig <- ff_agg_rd_rescaled
+
+for (day in names(table(samp_rd$DATEOFCYTOFEXPERIMENT))[-1]){
+  print(paste0("Rescaling day ", day))
+  files2rescale <- which(samp_rd$DATEOFCYTOFEXPERIMENT == day)
+  min_2rescale <- plyr::ldply(files2rescale, function(file_id){
+    min_ref <- apply(ff_agg_rd@exprs[which(exprs(ff_agg_rd)[,"File"] == file_id),c(3,17,28:62,71)],2,
+                     function(x) quantile(x, 0.01))
+  })
+  min_rescale <- apply(min_2rescale, 2, median)
+
+  max_2rescale<- plyr::ldply(files2rescale, function(file_id){
+    max_ref <- apply(ff_agg_rd@exprs[which(exprs(ff_agg_rd)[,"File"] == file_id),c(3,17,28:62,71)],2,
+                     function(x) quantile(x, 0.99))
+  })
+  max_rescale <- apply(max_2rescale, 2, median)
+
+  range_rescale <- max_rescale - min_rescale
+  range_ref <- max_ref - min_ref
+
+
+
+  for (file_nb in files2rescale){
+    for (marker in "Ce142Di"){ #colnames(ff_agg_rd@exprs)[c(3,17,28:62,71)]){
+      selection_file <- which(ff_agg_rd@exprs[,"File"]==file_nb)
+      ff_agg_rd_rescaled@exprs[selection_file, marker] <-
+        (((ff_agg_rd@exprs[selection_file, marker] - min_rescale[marker])/
+           (range_rescale[marker])) * range_ref[marker] ) + min_ref[marker]
+    }
+  }
+
+  layout(matrix(1:2, nrow = 2))
+  subsample <- sample(1:sum(exprs(ff_agg_rd)[,"File"]  %in% files2rescale), 10000)
+  plot(exprs(ff_agg_rd)[which(exprs(ff_agg_rd)[,"File"]  %in% files2rescale), c("File_scattered", get_channels(ff_agg_rd, "CD11a"))],
+       pch = ".")
+  points(files2rescale, max_2rescale[, "Ce142Di"], col = "red", pch = 19)
+  points(files2rescale, min_2rescale[, "Ce142Di"], col = "red", pch = 19)
+  abline(h = min_rescale["Ce142Di"], col = "red")
+  abline(h = max_rescale["Ce142Di"], col = "red")
+
+  plot(exprs(ff_agg_rd_rescaled)[which(exprs(ff_agg_rd_rescaled)[,"File"]  %in% files2rescale), c("File_scattered", get_channels(ff_agg_rd, "CD11a"))],
+       pch = ".")
+  points(files2rescale, max_2rescale[, "Ce142Di"], col = "red", pch = 19)
+  points(files2rescale, min_2rescale[, "Ce142Di"], col = "red", pch = 19)
+  abline(h = min_rescale["Ce142Di"], col = "red")
+  abline(h = max_rescale["Ce142Di"], col = "red")
+}
+
+
+plot_aggregate_markers(patient_names = rd_names, samp_patients=samp_rd, color_by = "DATEOFCYTOFEXPERIMENT",
+                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_nat_date_rescaled.png",
+                       x_names = samp_rd$Id.Cryostem.R ,ff_agg = ff_agg_rd_rescaled )
+
+save(ff_agg_rd_rescaled,
+     file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/ff_agg_rd_nat_date_rescaled.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/ff_agg_rd_nat_date_rescaled.RData")
+
 
 
 ###################
@@ -114,19 +255,27 @@ pctgs_rd <- generate_pctgs(
 )
 
 save(pctgs_rd, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/pctgs_rd.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/pctgs_rd.RData")
 tsne <- Rtsne::Rtsne(pctgs_rd)
 plot(tsne$Y, col = as.factor(samp_rd$HOSPITAL))
+
+pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclustering, sum)}))
 
 hc <- hclust(dist(pctgs_rd))
 library(dendextend)
 dend <- as.dendrogram(hc)
 labels_colors(dend) <- rainbow(13)[sort_levels_values(
-  as.numeric(as.factor(samp_rd$HOSPITAL))[order.dendrogram(dend)]
+  as.numeric(as.factor(samp_rd$DATEOFCYTOFEXPERIMENT))[order.dendrogram(dend)]
 )]
 dend <- set(dend, "labels_cex", 0.7)
+
+short_names <- names(rd_names)
+long_names <- as.character(rd_names)
+names(short_names) <- long_names
+reord_names <- short_names[names(labels_colors(dend))]
 
 plot(dend,
      main = "Clustering of the datasets",
      horiz =  F,  nodePar = list(cex = .007))
-legend("topleft", legend = c("non_tolerant","primary_tol","secondary_tol"), fill = c("red","green","blue"),cex=0.75)
+legend("topleft", legend = names(table(reord_names)), fill = names(table(labels_colors(dend))),cex=0.75)
 
