@@ -204,3 +204,50 @@ rownames(gr_annot) <- rownames(pctgs_meta_couple_tol)
 
 pheatmap::pheatmap(pctgs_meta_couple_tol[,-42],
                    cluster_rows = F, annotation_row = gr_annot)
+
+
+
+
+
+#####################################
+##########   METABO data   ##########
+#####################################
+
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/logdata.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/meta_metabo.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/big_mat.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/rd_meta.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/norm_data.RData")
+
+df_tmp <- big_mat %>%
+  select(c(colnames(norm_data)[-1], "Id.Cryostem.R", "GROUP", "COUPLENUMBER")) %>%
+  arrange(COUPLENUMBER)
+
+metabo_couple <- df_tmp %>%
+  group_by(COUPLENUMBER) %>%
+  summarise_if(is.numeric, ~.[1]-.[2]) %>%
+  mutate(group = unique(df_tmp[,c("GROUP", "COUPLENUMBER")])$GROUP) %>%
+  column_to_rownames("COUPLENUMBER")
+
+colnames(metabo_couple) <- make.names(colnames(metabo_couple))
+
+rf_subst <- randomForest::randomForest(as.factor(group)~., metabo_couple)
+rf_subst
+
+# non tol vs tol:
+gr_tmp <- as.character(metabo_couple$group)
+gr_tmp[which(gr_tmp %in% c("primary_tolerant", "secondary_tolerant"))] <- "tolerant"
+metabo_couple$group <- factor(gr_tmp)
+
+rf_subst <- randomForest::randomForest(group~., metabo_couple, mtry = 50,
+                                       importance = T, proximity = T)
+rf_subst
+
+######################################
+######### on recipients only #########
+
+load("outputs/data/metabo/recip/logdata.RData")
+load("outputs/data/metabo/recip/meta_metabo.RData")
+load("outputs/data/metabo/recip/recip_meta.RData")
+
+

@@ -131,6 +131,7 @@ meta_metabo <- info$meta_metabo
 data_metabolites <- info$data_metabolites
 names_patients <- rownames(data_metabolites)[grep("R", rownames(data_metabolites))]
 data_metabo_national <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Metabo/Metabo NATIONAL cohort CRYOSTEM.xlsx")
+recip_meta <- rd_meta[names_patients,]
 
 
 ##### filtering metabolites #####
@@ -139,105 +140,7 @@ res_preprocessing <- metabo_preprocess(patient_type = "recipients", data_metabol
                                        data_metabolites_national, rd_meta, names_patients,
                                        pdf_name = "outputs/plots/metabo/recip/preprocess_removed_metabolites.pdf",
                                        pdf_variance_name = "outputs/plots/metabo/recip/preprocess_variance_cutoff.pdf",
-                                       save_results = F, save_res_repository = NULL)
-
-
-data_metabolites <- data_metabolites[,-which((meta_metabo[2,]=="Xenobiotics")&(meta_metabo[1,]=="Drug"))] # rm drug xenobiotics
-data_metabo_national <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Metabo/Metabo NATIONAL cohort CRYOSTEM.xlsx")
-national_metabolites <- data_metabo_national$X1[-c(1,2)]
-# remove metabolites that are not present in both the national and the St_Louis cohort :
-data_metabolites <- data_metabolites[,which(colnames(data_metabolites) %in% national_metabolites)]
-
-##### generate figure similar to David's #####
-names_patients <- rownames(data_metabolites)[grep("R", rownames(data_metabolites))]
-
-big_mat <- data_metabolites[names_patients,] %>%
-  mutate_all(as.numeric) %>%
-  mutate(METABONAME = names_patients) %>%
-  left_join(rd_meta[,c("GROUP", "COUPLENUMBER", "METABONAME")], by = "METABONAME")
-
-na_pctgs <- big_mat %>%
-  group_by(GROUP) %>%
-  summarize_all(funs(sum(is.na(.)) / length(.)))
-
-melted <- melt(na_pctgs, id = 1:2)
-
-## marche pas:
-# to_rm <- melted %>%
-#   group_by(variable) %>%
-#   summarize_if(is.integer, funs(all(. > 0.5)))
-
-to_rm <- lapply(names(table(melted$variable)), function(metabolite){
-  values <- melted$value[which(melted$variable == metabolite)]
-  all(values > 0.5)
-})
-
-names2rm <- as.character(names(table(melted$variable))[which(to_rm == T)])
-plot2rm <- melted[which(melted$variable %in% names2rm),]
-table_pctg_na <- plot2rm %>%
-  mutate(variable = paste0(variable, GROUP))
-
-library(ggplot2)
-ggplot(data = table_pctg_na,
-       mapping = aes(x = variable, fill = GROUP,
-                     y = value)) +
-  geom_bar(stat = "identity") +
-  scale_y_continuous(labels = abs, limits = max(table_pctg_na$value) * c(0,1)) +
-  labs(y = "pctg of NA") +
-  coord_flip()
-
-##### new filtering : > 50% na in all groups, donors and recipients
-
-high_na <- which(to_rm==T)
-data_metabo <- data_metabolites[names_patients , -high_na]
-
-##### previous filtering : >50% in at least one group
-
-colsums <- by(data_metabolites, rd_meta$GROUP, # identify metabolites <50% in each group
-              FUN = function(x) {colSums(is.na(x)) >= nrow(x)*0.5})
-high_na <- which(colsums[[1]]&colsums[[2]]&colsums[[3]]) # identify metabolites <50% in all groups
-data_metabo <- data_metabolites[ , -high_na]
-
-for(i in 1:ncol(data_metabo)){ #replace remaining NA by 1/2 min column value + noise
-  x <- data_metabo[,i]
-  to_replace <- data_metabo[is.na(x),i]
-  with_noise <- jitter(rep(0.5*(min(as.numeric(x[-which(is.na(x))]))), length(to_replace)))
-  data_metabo[is.na(x),i] <- with_noise
-}
-
-# ignore metabolites with too small variance:
-sds <- apply(data_metabo,2,sd)
-plot(sort(sds), type = "l", ylim = c(0,10^7))
-abline(h=quantile(sds, 0.3), col="red")
-data_metabo <- data_metabo[,which(sds>=quantile(sds, 0.3))]
-rnames <- rownames(data_metabo)
-data_metabo <- apply(data_metabo,2,as.numeric)
-rownames(data_metabo) <- rnames
-
-# logtransform and normalise:
-mat2use <- merge.data.frame(as.data.frame(rd_meta[,2], row.names = rownames(rd_meta)),
-                            data_metabo, by = "row.names") %>%
-  tibble::column_to_rownames(var="Row.names")
-
-logdata <- LogTransform(mat2use)
-normdata <- Normalise(logdata$output, method = "median")
-colnames(normdata$output) <- colnames(logdata$output)
-norm_data <- normdata$output
-
-# merge dataframes:
-big_mat <- merge.data.frame(normdata$output, rd_meta, by = "row.names") %>%
-  tibble::column_to_rownames("Row.names")
-
-logdata <- logdata$output
-save(logdata, file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/logdata.RData")
-save(norm_data, file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/norm_data.RData")
-meta_metabo <- meta_metabo[,which(as.character(meta_metabo[3,])%in%colnames(norm_data))] # only selected metabolites
-save(meta_metabo, file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/meta_metabo.RData")
-save(big_mat, file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/big_mat.RData")
-save(rd_meta, file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/rd_meta.RData")
-
-
-
+                                       save_results = T, save_res_repository = "outputs/data/metabo/recip/")
 
 
 #################################################
@@ -247,7 +150,6 @@ save(rd_meta, file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outpu
 load("outputs/data/metabo/recip/norm_data.RData")
 load("outputs/data/metabo/recip/meta_metabo.RData")
 load("outputs/data/metabo/recip/big_mat.RData")
-load("outputs/data/metabo/recip/recip_meta.RData")
 
 ##### pca #####
 acp <- prcomp(big_mat[,2:(ncol(big_mat)-ncol(recip_meta))])
