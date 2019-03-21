@@ -271,6 +271,7 @@ identify_fsom_cellPopulations(fsom = fsom_rdn,
 
 fcs_dir <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/fcs/"
 fcs_names <- list.files(fcs_dir, pattern="^2.*fcs$")
+fcs_names[["R1044"]] <- "20170530_R1044_01_normalized_livecellswithoutbeads__livecells__ADN__time__Ungated_____ICOScleaned__Ungated_"
 names(fcs_names) <- gsub("^[0-9]*_([^_]*)_.*", "\\1", fcs_names)
 rd_names <- fcs_names[-which(names(fcs_names)%in%c("12R","18R","12D","D1071","D369"))]
 
@@ -379,26 +380,26 @@ save(pctgs_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_P
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_rd.RData")
 
 # manual annotation with Laetitia's labels:
-bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_14:01:19/Pop ID Backbone R&Dall.xlsx")
-bb_rd_ordered <- bb_rd[order(bb_rd$Cluster),]
-#bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/CYTOF/PopID_Correction_Backbone_R&Dall_7032019_Laetitia.xlsx")
-#bb_rd_ordered <- bb_rd[order(bb_rd$Cluster.FS),]
-fsom_rd$metaclustering <- bb_rd_ordered$Metacluster
+#bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_14:01:19/Pop ID Backbone R&Dall.xlsx")
+#bb_rd_ordered <- bb_rd[order(bb_rd$Cluster),]
+bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/CYTOF/PopID_Backbone_R&Dall_18032019.xlsx")
+bb_rd_ordered <- bb_rd[order(bb_rd$Cluster.FS),]
+fsom_rd$metaclustering <- bb_rd_ordered[,3]
 
 pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclustering, sum)}))
-save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_orig.RData")
-load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_orig.RData")
+save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_18_03.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_18_03.RData")
 
 # with Laetitia's names :
-meta_rd_labels <- seq_along(colnames(pctgs_meta_rd))
+meta_rd_labels <- seq_along(table(bb_rd_ordered[,3]))
 new_labels <- lapply(seq_along(meta_rd_labels), function(i){
-  meta_rd_labels[i] <- bb_rd[which(bb_rd$Metacluster==i),2][1]
+  meta_rd_labels[i] <- bb_rd[which(bb_rd[,3] == i),2][1]
 })
 colnames(pctgs_meta_rd) <- new_labels
 
 #colnames(pctgs_meta_rd) <- names(table(bb_rd_ordered$Population.Correction.with.FlowJo))
-save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_orig_with_metaclust_labels.RData")
-load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_orig_with_metaclust_labels.RData")
+save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_18_03_with_metaclust_labels.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_18_03_with_metaclust_labels.RData")
 write.xlsx(pctgs_meta_rd, file = "~/Desktop/table_pctgs_old_metaclusters_DR.xlsx", row.names=T)
 
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_with_metaclust_labels.RData")
@@ -409,8 +410,9 @@ write.xlsx(pctgs_meta_rd, file = "~/Desktop/table_pctgs_new_metaclusters_DR.xlsx
 ########  FUNCTIONAL MARKERS  #########
 #######################################
 
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd_old.RData")
 #wsp_file <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/fcs/Threshold_41BB_ICOScleanedFCS.wsp"
-wsp_file <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/fcs/Threshold_functionalmarkers_ICOScleanedFCS.wsp"
+wsp_file <- "~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/fcs/Threshold_functionalmarkers_ICOScleaned_14032019_LagT .wsp"
 
 wsp <- openWorkspace(wsp_file)
 gates <- parseWorkspace(wsp, "All Samples", sampNloc = "sampleNode")
@@ -428,8 +430,9 @@ gates_manual <- lapply(gates_matrix, function(x){
   FlowSOMworkshop::manual_vector(x, leaf_nodes)
 })
 names(gates_manual) <- gsub("_[0-9]*$", "", names(gates_manual))
+names(gates_manual)[1] <- "20170530_D2031_01_livecellswithoutbeads__livecells__ADN__time__Ungated____.fcs"
 
-file <- names(gates_manual)[5]
+#file <- names(gates_manual)[6]
 result <- list()
 for(file in names(gates_manual)){
   ff <- read.FCS(file.path(fcs_dir, file))
@@ -443,97 +446,47 @@ for(file in names(gates_manual)){
   celltype_colors <- grDevices::colorRampPalette(c("white", "#00007F",
                                                    "blue", "#007FFF", "cyan", "#7FFF7F", "yellow", "#FF7F00", "red"))(19)
   names(celltype_colors) <- levels(gates_manual[[file]])
-  pdf(file = paste0("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/plots/cyto_national/patient_", file,".pdf"))
-  PlotPies(fsom_tmp, gates_manual[[file]])
+  file_red <- gsub("^[0-9]*_([^_]*)_.*", "\\1", file)
+  pdf(file = paste0("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/plots/cyto_national/fsom_new_funct_markers/patient_", file_red,".pdf"))
+  PlotPies(fsom_tmp, gates_manual[[file]],
+           main = paste0(file_red,"_", samp_rd[file_red, "GROUP"], "_", samp_rd[file_red, "DATEOFCYTOFEXPERIMENT"]))
   dev.off()
   result[[file]] <- list(cluster_labels = cluster_labels,
                          cluster_assignment = cluster_assignment)
 }
 
-PlotNumbers(fsom_tmp)
-result[[10]]$cluster_labels[151]
-t(sapply(result, function(x)x$cluster_assignment[151,]))
+save(result, file = "outputs/data/cyto/3_backbones/backbone_2_D&Rall/ratios_funct_meta_rd_old.RData")
 
+###################################################
+### re-arranging the functional marker matrices ###
+###################################################
 
-#generate MFIs
-markers <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/PANEL CYTOF corrigé 07.2018.xlsx",
-                     check.names = FALSE) ## excel file with info about markers
+load("outputs/data/cyto/3_backbones/backbone_2_D&Rall/ratios_funct_meta_rd_old.RData")
 
-## find only functional markers
-funct_marks<-markers[which((markers[,5]==1)),1]
-markersToPlot <- names(prettyMarkerNames)[which(prettyMarkerNames%in%funct_marks)]
-names(funct_marks) <- markersToPlot
-
-
-mfis_rd <- generate_meta_MFIs(rd_names, fsom_rd, cols_to_use = markersToPlot,
-                              min_ref = min_ref, max_ref = max_ref,
-                              files2rescale = c("D1073", "D1502"))
-
-save(mfis_rd, file ="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/mfis_meta_rd.RData")
-load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/mfis_meta_rd.RData")
-
-mfis_rd <- lapply(mfis_rd,function(x){
-  rownames(x) <- names(rownames(x))
-  x
+tables_res <- lapply(2:14, function(marker){
+  names(marker) <- colnames(result[[1]]$cluster_assignment)[marker]
 })
-names(mfis_rd) <- funct_marks
 
-m41BB <- mfis_rd[[1]]
-m41BB <- merge(m41BB, samp_rd, by = "row.names")
-barplot(m41BB[,2], col = m41BB$DATEOFCYTOFEXPERIMENT) # all the high ones are from the same day
-days <- levels(as.factor(m41BB$DATEOFCYTOFEXPERIMENT))
-barplot(m41BB[which(m41BB$DATEOFCYTOFEXPERIMENT==days[1]),2],
-        col = c("red","green","blue")[m41BB$GROUP[which(m41BB$DATEOFCYTOFEXPERIMENT==days[1])]])
-
-png("~/Documents/VIB/Projects/Integrative_Paris/Integrative/distrib_patients.png")
-barplot(pctgs_cor[,2], col = c("red","blue","green")[pctgs_cor$GROUP])
-
-png("~/Documents/VIB/Projects/Integrative_Paris/Integrative/metaclust_1_41BB.png",
-    width = 4000,
-    height = 1000)
-par(cex.lab = 2.5, mar = c(4.1,5.1,2.1,2.1))
-layout(matrix(1:7, nrow=1, byrow = TRUE))
-for(batch in seq_along(days)){
-  boxplot(m41BB$MC1[which(m41BB$DATEOFCYTOFEXPERIMENT==days[batch])]~
-            m41BB$GROUP[which(m41BB$DATEOFCYTOFEXPERIMENT==days[batch])],
-          col= c("red","green","blue"))
+for(pat in seq_along(result)){
+  for (marker in 2:14){
+    tables_res[[marker-1]] <- rbind(tables_res[[marker-1]], result[[pat]]$cluster_assignment[,marker])
+  }
 }
-# plot.new()
-# legend("center",legend=levels(pctgs_cor$GROUP), col=c("red","green","blue"),
-#        pch=19, cex=3)
-dev.off()
 
+names(tables_res) <- colnames(result[[1]]$cluster_assignment)[-1]
+tables_res <- lapply(tables_res, function(mat){
+  mat2 <- apply(mat[-1,], 1, function(row_mat){
+    row_mat <- as.numeric(row_mat)
+    row_mat <- row_mat/(sum(row_mat))
+  })
+  rownames(mat2) <- paste0(as.character(mat[1,1]), "_", new_labels)
+  t(mat2)
+})
 
-boxplot(m41BB$MC1[which(m41BB$DATEOFCYTOFEXPERIMENT==days[1])]~
-          m41BB$GROUP[which(m41BB$DATEOFCYTOFEXPERIMENT==days[1])],
-        col= c("red","green","blue"))
-boxplot(m41BB$MC1[which(m41BB$DATEOFCYTOFEXPERIMENT==days[2])]~
-          m41BB$GROUP[which(m41BB$DATEOFCYTOFEXPERIMENT==days[2])],
-        col= c("red","green","blue"))
+save(tables_res, file = "outputs/data/cyto/3_backbones/backbone_2_D&Rall/funct_mark_res_orig.RData")
 
+funct_big_table <- do.call(cbind, tables_res)
 
-## generate and plot the expression of the functional markers in all the
-## patient's cells, per metacluster:
-
-markers <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_22:02:18/CYTOF_David_Michonneau/PANEL CYTOF corrigé 07.2018.xlsx",
-                     check.names = FALSE) ## excel file with info about markers
-
-## find only functional markers
-funct_marks<-markers[which((markers[,5]==1)),1]
-markersToPlot <- names(prettyMarkerNames)[which(prettyMarkerNames%in%funct_marks)]
-names(funct_marks) <- markersToPlot
-
-metacluster_values <- extract_funct_markers(rd_names, fsom_rd, funct_marks = funct_marks,
-                                            min_ref, max_ref, files2rescale = c("D1073", "D1502"),
-                                            samp_patients = samp_rd)
-save(metacluster_values, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/metaclust_funct_values.RData")
-load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/metaclust_funct_values.RData")
-
-png_name <- "~/Desktop/test2.png"
-
-plot_funct_markers(metaclust_values,
-                   patient_names = rd_names,
-                   samp_patients = samp_rd, png_name = png_name)
 
 
 
@@ -547,12 +500,13 @@ PlotStars(fsom_meta_rd$FlowSOM,
           markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD4","CD8a","CD20","IgM","CD38","CD25","CD3","CD11a","CD19"))])
 PlotNumbers(fsom_meta_rd$FlowSOM)
 
-save(fsom_meta_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd_old.RData")
+save(fsom_meta_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd_new.RData")
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd_old.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd.RData")
 
 meta_rd_labels <- seq_len(nrow(fsom_meta_rd$FlowSOM$map$codes))
 new_labels <- lapply(seq_along(meta_rd_labels), function(i){
-  meta_rd_labels[i] <- bb_rd[which(bb_rd$Metacluster==i),2][1]
+  meta_rd_labels[i] <- bb_rd[which(bb_rd$Metacluster.15.03==i),2][1]
 })
 
 PlotLabels(fsom_meta_rd$FlowSOM, labels = new_labels, fontSize = .8)
