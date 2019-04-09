@@ -382,13 +382,13 @@ load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/
 # manual annotation with Laetitia's labels:
 #bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_14:01:19/Pop ID Backbone R&Dall.xlsx")
 #bb_rd_ordered <- bb_rd[order(bb_rd$Cluster),]
-bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/CYTOF/PopID_Backbone_R&Dall_18032019.xlsx")
+bb_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/CYTOF/PopID_Backbone_R&Dall_Final_1.04.19.xlsx")
 bb_rd_ordered <- bb_rd[order(bb_rd$Cluster.FS),]
 fsom_rd$metaclustering <- bb_rd_ordered[,3]
 
 pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclustering, sum)}))
-save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_18_03.RData")
-load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_18_03.RData")
+save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_1_04.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_1_04_with_metaclust_labels.RData")
 
 # with Laetitia's names :
 meta_rd_labels <- seq_along(table(bb_rd_ordered[,3]))
@@ -398,13 +398,13 @@ new_labels <- lapply(seq_along(meta_rd_labels), function(i){
 colnames(pctgs_meta_rd) <- new_labels
 
 #colnames(pctgs_meta_rd) <- names(table(bb_rd_ordered$Population.Correction.with.FlowJo))
-save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_18_03_with_metaclust_labels.RData")
+save(pctgs_meta_rd, file="/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_1_04_with_metaclust_labels.RData")
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_18_03_with_metaclust_labels.RData")
 write.xlsx(pctgs_meta_rd, file = "~/Desktop/table_pctgs_old_metaclusters_DR.xlsx", row.names=T)
 
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_with_metaclust_labels.RData")
 head(pctgs_meta_rd[,1:5])
-write.xlsx(pctgs_meta_rd, file = "~/Desktop/table_pctgs_new_metaclusters_DR.xlsx", row.names=T)
+write.xlsx(pctgs_meta_rd, file = "~/Desktop/table_pctgs_18_03_metaclusters.xlsx", row.names=T)
 
 #######################################
 ########  FUNCTIONAL MARKERS  #########
@@ -447,7 +447,7 @@ for(file in names(gates_manual)){
                                                    "blue", "#007FFF", "cyan", "#7FFF7F", "yellow", "#FF7F00", "red"))(19)
   names(celltype_colors) <- levels(gates_manual[[file]])
   file_red <- gsub("^[0-9]*_([^_]*)_.*", "\\1", file)
-  pdf(file = paste0("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/plots/cyto_national/fsom_new_funct_markers/patient_", file_red,".pdf"))
+  pdf(file = paste0("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/plots/cyto/3_backbones/backbone_2_D&Rall/fsom_1_04_funct_markers/patient_", file_red,".pdf"))
   PlotPies(fsom_tmp, gates_manual[[file]],
            main = paste0(file_red,"_", samp_rd[file_red, "GROUP"], "_", samp_rd[file_red, "DATEOFCYTOFEXPERIMENT"]))
   dev.off()
@@ -455,21 +455,31 @@ for(file in names(gates_manual)){
                          cluster_assignment = cluster_assignment)
 }
 
-save(result, file = "outputs/data/cyto/3_backbones/backbone_2_D&Rall/ratios_funct_meta_rd_old.RData")
+save(result, file = "outputs/data/cyto/3_backbones/backbone_2_D&Rall/ratios_funct_meta_rd_1_04.RData")
 
 ###################################################
 ### re-arranging the functional marker matrices ###
 ###################################################
 
-load("outputs/data/cyto/3_backbones/backbone_2_D&Rall/ratios_funct_meta_rd_old.RData")
+load("outputs/data/cyto/3_backbones/backbone_2_D&Rall/ratios_funct_meta_rd_1_04.RData")
 
 tables_res <- lapply(2:14, function(marker){
   names(marker) <- colnames(result[[1]]$cluster_assignment)[marker]
 })
 
+nClus = 38
+
 for(pat in seq_along(result)){
   for (marker in 2:14){
-    tables_res[[marker-1]] <- rbind(tables_res[[marker-1]], result[[pat]]$cluster_assignment[,marker])
+    if(length(result[[pat]]$cluster_assignment[,marker]) != nClus){
+      patient_vector <- rep(0, nClus)
+      names(patient_vector) <- 1:nClus
+      patient_vector[names(result[[pat]]$cluster_assignment[,marker])] <- result[[pat]]$cluster_assignment[,marker]
+
+      tables_res[[marker-1]] <- rbind(tables_res[[marker-1]], patient_vector)
+    } else {
+      tables_res[[marker-1]] <- rbind(tables_res[[marker-1]], result[[pat]]$cluster_assignment[,marker])
+    }
   }
 }
 
@@ -479,15 +489,15 @@ tables_res <- lapply(tables_res, function(mat){
     row_mat <- as.numeric(row_mat)
     row_mat <- row_mat/(sum(row_mat))
   })
-  rownames(mat2) <- paste0(as.character(mat[1,1]), "_", new_labels)
+  rownames(mat2) <- paste0(as.character(mat[1,1]), "_", 1:nClus)
   t(mat2)
 })
 
-save(tables_res, file = "outputs/data/cyto/3_backbones/backbone_2_D&Rall/funct_mark_res_orig.RData")
+save(tables_res, file = "outputs/data/cyto/3_backbones/backbone_2_D&Rall/funct_mark_res_1_04.RData")
 
 funct_big_table <- do.call(cbind, tables_res)
 
-
+load("outputs/data/cyto/3_backbones/backbone_2_D&Rall/funct_mark_res_18_03.RData")
 
 
 
@@ -500,7 +510,7 @@ PlotStars(fsom_meta_rd$FlowSOM,
           markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD4","CD8a","CD20","IgM","CD38","CD25","CD3","CD11a","CD19"))])
 PlotNumbers(fsom_meta_rd$FlowSOM)
 
-save(fsom_meta_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd_new.RData")
+save(fsom_meta_rd, file = "/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd_1_04.RData")
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd_old.RData")
 load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd.RData")
 
