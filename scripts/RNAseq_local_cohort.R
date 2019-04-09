@@ -29,7 +29,7 @@ normalizePerGene<-function(expMatrix){
 }
 
 ##### Load raw counts
-countData<-read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_RNAseq_14:01:19/Global_table_StLouis_completed.xlsx")
+countData<-read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/RNAseq/Global_table_StLouis_completed.xlsx")
 colnames(countData) <- as.character(countData[1,]) # set patient names as colnames
 rownames(countData) <- countData$ID # set gene names as rownames
 countData_withinfo <- countData[,-1]
@@ -49,11 +49,11 @@ dim(countData)
 # [1] 60433    80
 
 ### Load meta data
-colData<-read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/documents_RNAseq_14:01:19/Data synthesis local cohort Saint-Louis 15012019.xlsx")
+colData<-read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
 colData <- colData[!is.na(colData$RNAseq.ID),] # rm rows with no RNAseq sample
 rownames(colData) <- colData$Id.Cryostem.R
 dim(colData)
-# 80 53
+# 80 55
 
 ### Reorder
 countData<-countData[,rownames(colData)]
@@ -110,7 +110,7 @@ normfac <- calcNormFactors(y, method = "TMM")
 
 #### Create design matrix
 # for the three groups :
-patient_groups <- as.character(colData$GROUP)
+patient_groups <- tolower(colData$GROUP)
 TS <- patient_groups[c(donor_id, recip_id)]
 
 TS <- factor(TS, levels=unique(TS))
@@ -131,6 +131,11 @@ expTable<-v$E
 vfit <- lmFit(v)
 efit <- eBayes(vfit)
 plotSA(efit)
+
+DE_list <- list(v, design)
+
+save(expTable, file = "outputs/data/RNAseq/expression_table.RData")
+save(DE_list, file = "outputs/data/RNAseq/data_for_DE.RData")
 
 ################################################################################
 ########## GET DE GENES
@@ -224,28 +229,15 @@ print(p)
 
 ## THIS FUNCTION DOESN'T TAKE THE rmax PARAMETER INTO ACCOUNT -> FIX IT FOR MARTIN
 p<-interactiveDotplot(expDE_mean, Gdiffexp=allDEgenes, plotLocalEnrichment=FALSE,
-                      rmax = 10)#, Goi=IL17genes)
+                      rmax = 5)#, Goi=IL17genes)
 print(p)
 saveWidget(p,file="~/Documents/VIB/Projects/Immgen/analysis/interactiveTriwisePlot_filtered_DEgenes_all_organs.html") ##needs full path!
 #######################
-
-p<-plotDotplot(theBarycoords, Gdiffexp=allDEgenes, Goi="Clec4f", showlabels = F)
-print(p)
-ggsave(p,file="results_allSamples/plots_samplesA/after_combat/triwisePlot_IL17.png",dpi=300)
 
 ###Rose plot
 p<-plotRoseplot(theBarycoords, Gdiffexp=allDEgenes, showlabels = F)
 print(p)
 ggsave(p,file="results_allSamples/plots_samplesA/after_combat/rosePlot.png",dpi=300)
 
-p<-plotRoseplot(theBarycoords, Gdiffexp=allDEgenes, showlabels = F, Goi=IL17genes)
-print(p)
-ggsave(p,file="results_allSamples/plots_samplesA/after_combat/rosePlot_IL17.png",dpi=300)
-
-###Interactive plot
-p<-interactiveDotplot(expTable_mean, Gdiffexp=allDEgenes, plotLocalEnrichment=FALSE)#, Goi=IL17genes)
-print(p)
-saveWidget(p,file="~/Documents/VIB/Projects/Immgen/analysis/interactiveTriwisePlot_lung_mac1_and_2.html") ##needs full path!
-## Save manually as 'triwisePlot_IL17_highlighted.png'
 
 save(expTable, allDEgenes, file = "~/Documents/VIB/Projects/Immgen/analysis/all_organs_expTable_allDEgenes.RData")
