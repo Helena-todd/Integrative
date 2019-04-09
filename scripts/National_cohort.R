@@ -23,14 +23,16 @@ names(fcs_names) <- gsub("^[0-9]*_([^_]*)_.*", "\\1", fcs_names)
 
 ## Import associated metadata :
 
-samp_rd_all <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/CYTOF/Data synthesis national cohort Cryostem 22222019.xlsx")
+samp_rd_all <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 22222019.xlsx")
 samp_rd_all$DATEOFCYTOFEXPERIMENT <- as.Date(samp_rd_all$DATEOFCYTOFEXPERIMENT, format = "%d.%m.%Y")
 
 ## Filter out data :
 samp_rd <- samp_rd_all %>%
   dplyr::filter(DELAY_SAMPLE >= 148) %>%
-  dplyr::filter(!Couple.number %in% c(32, 71)) %>%
+  dplyr::filter(!COUPLENUMBER %in% c(32, 71)) %>%
   arrange(DATEOFCYTOFEXPERIMENT)#arrange(HOSPITAL,DATEOFCYTOFEXPERIMENT)
+
+save(samp_rd, file = "~/Documents/VIB/Projects/Integrative_Paris/National_cohort/samp_rd_national.RData")
 
 rd_names <- fcs_names[samp_rd$Id.Cryostem.R] # rearrange per hospital for the plots
 
