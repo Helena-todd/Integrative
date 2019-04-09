@@ -18,7 +18,12 @@ extract_info_metabo <- function(metadata_file, metabo_file){
   rownames(patient_meta) <- patient_meta$METABONAME
 
   ## strange numbers after row 390, I only read 80 first rows (corresponding to patients)
-  metabo<- read.xlsx(metabo_file, rows = c(1:82), colNames = F, rowNames = T)
+  if(length(grep("local", metabo_file))==1){
+    metabo<- read.xlsx(metabo_file, rows = c(1:82), colNames = F, rowNames = T)
+  } else {
+    metabo <- read.xlsx(metabo_file, colNames = F, rowNames = T)
+    }
+
   meta_metabo <- metabo[1:3,]
   data_metabolites <- metabo[which(rownames(metabo)%in%rownames(patient_meta)),]
   colnames(data_metabolites) <- metabo[which(rownames(metabo)=="metabolite"),]

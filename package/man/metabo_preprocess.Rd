@@ -5,7 +5,7 @@
 \title{metabo_preprocess}
 \usage{
 metabo_preprocess(patient_type, data_metabolites, meta_metabo,
-  data_metabolites_national, rd_meta, names_patients, pdf_name,
+  other_cohort_metabolites, rd_meta, names_patients, pdf_name,
   pdf_variance_name, save_results, save_res_repository)
 }
 \arguments{
@@ -15,7 +15,7 @@ metabo_preprocess(patient_type, data_metabolites, meta_metabo,
 
 \item{meta_metabo}{A dataframe containing information on the metabolites, as returned by the extract_info_metabo function}
 
-\item{data_metabolites_national}{The metabo data frame of the unused cohort, to extract common metabolites}
+\item{other_cohort_metabolites}{The names of the metabolites from the unused cohort}
 
 \item{rd_meta}{The dataframe containing clinical information, as returned by the extract_info_metabo function}
 

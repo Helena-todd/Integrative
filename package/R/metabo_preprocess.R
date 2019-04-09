@@ -3,7 +3,7 @@
 #' @param patient_type A charcter string, either "donors", "recipients" or "donors and recipients"
 #' @param data_metabolites The metabo data frame, with patients in rows and metabolites in columns
 #' @param meta_metabo A dataframe containing information on the metabolites, as returned by the extract_info_metabo function
-#' @param data_metabolites_national The metabo data frame of the unused cohort, to extract common metabolites
+#' @param other_cohort_metabolites The names of the metabolites from the unused cohort
 #' @param rd_meta The dataframe containing clinical information, as returned by the extract_info_metabo function
 #' @param names_patients A character string containing the names of the patients to analyse
 #' @param pdf_name Name of the figure containing the metabolites with too many NAs
@@ -19,14 +19,12 @@
 #' data_metabolites_national, rd_meta, names_patients,
 #' pdf_name = "rm_metabo.pdf", pdf_variance_name = "variance_cutoff.pdf", save_results = T, save_res_repository = "Desktop/")
 metabo_preprocess <- function(patient_type, data_metabolites, meta_metabo,
-                              data_metabolites_national, rd_meta, names_patients,
+                              other_cohort_metabolites, rd_meta, names_patients,
                               pdf_name, pdf_variance_name, save_results, save_res_repository){
   ##### filtering #####
 
-  data_metabolites <- data_metabolites[,-which((meta_metabo[2,]=="Xenobiotics")&(meta_metabo[1,]=="Drug"))] # rm drug xenobiotics
-  national_metabolites <- data_metabo_national$X1[-c(1,2)]
   # remove metabolites that are not present in both the national and the St_Louis cohort :
-  data_metabolites <- data_metabolites[,which(colnames(data_metabolites) %in% national_metabolites)]
+  data_metabolites <- data_metabolites[,which(colnames(data_metabolites) %in% other_cohort_metabolites)]
 
   ##### generate figure similar to David's #####
 
@@ -95,14 +93,24 @@ metabo_preprocess <- function(patient_type, data_metabolites, meta_metabo,
   ##### new filtering : > 50% na in all groups, donors and recipients
 
   high_na <- which(to_rm==T)
-  data_metabo <- data_metabolites[names_patients, , -high_na]
+  data_metabo <- data_metabolites[names_patients, -high_na]
 
+  empty_metabolites <- c()
   for(i in 1:ncol(data_metabo)){ #replace remaining NA by 1/2 min column value + noise
     x <- data_metabo[,i]
-    to_replace <- data_metabo[is.na(x),i]
-    with_noise <- jitter(rep(0.5*(min(as.numeric(x[-which(is.na(x))]))), length(to_replace)))
-    data_metabo[is.na(x),i] <- with_noise
+    if(all(is.na(x))){
+      empty_metabolites <- c(empty_metabolites, i)
+    } else {
+      to_replace <- data_metabo[is.na(x),i]
+      with_noise <- jitter(rep(0.5*(min(as.numeric(x[-which(is.na(x))]))), length(to_replace)))
+      data_metabo[is.na(x),i] <- with_noise
+    }
   }
+
+  if(length(empty_metabolites)!=0){
+    data_metabo <- data_metabo[,-empty_metabolites]
+  } else { data_metabo = data_metabo }
+
 
   # ignore metabolites with too small variance:
   sds <- apply(data_metabo,2,sd)
@@ -116,7 +124,7 @@ metabo_preprocess <- function(patient_type, data_metabolites, meta_metabo,
   rownames(data_metabo) <- rnames
 
   # logtransform and normalise:
-  mat2use <- merge.data.frame(as.data.frame(rd_meta[,2], row.names = rownames(rd_meta)),
+  mat2use <- merge.data.frame(as.data.frame(rd_meta[,"GROUP"], row.names = rownames(rd_meta)),
                               data_metabo, by = "row.names") %>%
     tibble::column_to_rownames(var="Row.names")
 
