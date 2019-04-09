@@ -131,13 +131,15 @@ meta_metabo <- info$meta_metabo
 data_metabolites <- info$data_metabolites
 names_patients <- rownames(data_metabolites)[grep("R", rownames(data_metabolites))]
 data_metabo_national <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Metabo/Metabo NATIONAL cohort CRYOSTEM.xlsx")
+national_metabolites <- data_metabo_national$X1[-c(1,2)]
 recip_meta <- rd_meta[names_patients,]
+data_metabolites <- data_metabolites[,-which((meta_metabo[2,]=="Xenobiotics")&(meta_metabo[1,]=="Drug"))] # rm drug xenobiotics
 
 
 ##### filtering metabolites #####
 
 res_preprocessing <- metabo_preprocess(patient_type = "recipients", data_metabolites, meta_metabo,
-                                       data_metabolites_national, rd_meta, names_patients,
+                                       other_cohort_metabolites = national_metabolites, rd_meta, names_patients,
                                        pdf_name = "outputs/plots/metabo/recip/preprocess_removed_metabolites.pdf",
                                        pdf_variance_name = "outputs/plots/metabo/recip/preprocess_variance_cutoff.pdf",
                                        save_results = T, save_res_repository = "outputs/data/metabo/recip/")
@@ -150,6 +152,14 @@ res_preprocessing <- metabo_preprocess(patient_type = "recipients", data_metabol
 load("outputs/data/metabo/recip/norm_data.RData")
 load("outputs/data/metabo/recip/meta_metabo.RData")
 load("outputs/data/metabo/recip/big_mat.RData")
+
+# RF:
+rf_mat <- big_mat %>%
+  dplyr::select(- which(colnames(big_mat) %in% colnames(recip_meta))) %>%
+  rename_all(make.names)
+
+rf_recip <- randomForest::randomForest(Group~., rf_mat, mtry = 40)
+rf_recip
 
 ##### pca #####
 acp <- prcomp(big_mat[,2:(ncol(big_mat)-ncol(recip_meta))])
