@@ -4,7 +4,8 @@
 \alias{rf_tol1_tol2}
 \title{Title}
 \usage{
-rf_tol1_tol2(df_orig, mtry = 3, ntree = 10000)
+rf_tol1_tol2(df_orig, mtry = 3, ntree = 10000,
+  package_2use = "randomForest")
 }
 \arguments{
 \item{df_orig}{Original dataframe on which rf should be run. Should contain a "group" column, with "primary_tolerant", "secondary_tolerant" or "non_tolerant" factor levels}
@@ -12,6 +13,8 @@ rf_tol1_tol2(df_orig, mtry = 3, ntree = 10000)
 \item{mtry}{Number of parameters to be tested by RF at every split}
 
 \item{ntree}{Number of trees in the RF}
+
+\item{package_2use}{The random forest implementation to use (either "randomForest" or "ranger")}
 }
 \value{
 RF results on classification of tol vs non-tol patients

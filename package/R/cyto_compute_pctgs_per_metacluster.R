@@ -44,7 +44,7 @@ generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir,
       tlist
     )
 
-    if(names(recip_names[i]) %in% files2rescale){
+    if((length(files2rescale)!=0)&(names(recip_names[i]) %in% files2rescale)){
       for (marker in colnames(exprs(ff_t))[c(3,17,28:62,71)]){
         exprs(ff_t)[, marker] <-
           scales::rescale(exprs(ff_t)[, marker],
