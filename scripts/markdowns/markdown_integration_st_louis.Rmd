@@ -1,0 +1,343 @@
+---
+title: "Integration on the St-Louis cohort"
+author: "helena"
+date: "16/04/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r imports, echo=FALSE, results='hide',  warning = FALSE}
+suppressPackageStartupMessages({
+  library("openxlsx")
+  library("FlowSOM")
+  library("tidyverse")
+  library("magrittr")
+  library("flowCore")
+  library("flowWorkspace")
+  library("ggraph")
+  library("igraph")
+  library("scales")
+  library("dendextend")
+  library("cowplot")
+  library("pheatmap")
+  library(dplyr)
+  library(BioGVHD)
+  library(data.table)
+  library(dendextend)
+  library(ggplot2)
+  library(nnet)
+  library(pROC)
+  library(VennDiagram)
+})
+library(BioGVHD)
+options("scipen"=100)
+```
+
+```{r}
+func <- function(...){
+  df1 = list(...)[[1]]
+  df2 = list(...)[[2]]
+  col1 = colnames(df1)[1]
+  col2 = colnames(df2)[1]
+  xxx = left_join(..., by = "couple_nb")#setNames(col2,col1))
+  return(xxx)
+}
+```
+
+
+## Analysis of the recipients, donors and D-R for one data type:
+
+I load the top 100 CyTOF variables for the three patient types, and select the top 100 informative variable overall:
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/compar/donor_AUCs.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/compar/recip_AUCs.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/dr_AUCs.RData")
+
+all_aucs <- c(recip_AUCs$auc, dr_AUCs$auc, donor_AUCs$auc)
+all_aucs_orig <- c(rep("R", nrow(donor_AUCs)),
+                   rep("DR", nrow(recip_AUCs)),
+                   rep("D", nrow(dr_AUCs)))
+
+barplot(all_aucs[order(all_aucs, decreasing = T)], col = as.factor(all_aucs_orig[order(all_aucs, decreasing = T)]),
+        ylim= c(0.6, 0.95))
+abline(v=100, col = "red", lwd = 2)
+legend("topright", legend = c("Recip_AUCs", "D-R_AUCs", "D AUCs"),
+       col = c("green", "red", "black"), lty = 1)
+```
+
+I extract the names of the top 100 variables (- the duplicated ones):
+```{r}
+all_names <- c(paste0("R_",recip_AUCs$goi_recip_100), 
+               paste0("DR_",dr_AUCs$goi_dr_100), 
+               paste0("D_",donor_AUCs$goi_donor_100))
+top_names <- all_names[which(order(all_aucs, decreasing = TRUE)<=100)]
+
+# find the dupplicates:
+top_names_bis <- gsub("^[A-Z]*_", "", top_names)
+
+top_names_filtered <- top_names[-which(duplicated(top_names_bis))]
+top_names_filtered
+```
+
+I extract the matrix corresponding to these top variables:
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/recip_select.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/donors/donor_select.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/dr_select.RData")
+
+colnames(donor_select)[-which(colnames(donor_select)=="couple_nb")] <- 
+  paste0("D_", colnames(donor_select)[-which(colnames(donor_select)=="couple_nb")])
+colnames(recip_select)[-which(colnames(recip_select)=="couple_nb")] <- 
+  paste0("R_", colnames(recip_select)[-which(colnames(recip_select)=="couple_nb")])
+colnames(dr_select)[-which(colnames(dr_select)=="couple_nb")] <- 
+  paste0("DR_", colnames(dr_select)[-which(colnames(dr_select)=="couple_nb")])
+
+dr_select$couple_nb <- as.numeric(dr_select$couple_nb)
+
+dfs <- list(
+              df1 = donor_select,
+              df2 = dr_select,
+              df3 = recip_select
+         )
+
+
+cytof <- Reduce( func, dfs)
+
+rownames(cytof) <- cytof$D_Id.Cryostem.R
+cytof_filtered <- as.data.frame(cytof) %>% 
+  dplyr::select(-c("R_Id.Cryostem.R", "R_Id.Cryostem.R", "couple_nb", "D_group", "R_group") )
+
+cytof_filt <- cytof_filtered[,which(colnames(cytof_filtered) %in% top_names_filtered)]
+```
+
+Color the nodes based on the data source:
+```{r}
+correlations_non_prim <- cytof_filt %>%
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>%
+  dplyr::filter(var1 < var2)
+
+cor_non_prim_features <- correlations_non_prim[which(correlations_non_prim$value > 0.8),]
+
+gr_NP <- graph_from_data_frame(cor_non_prim_features, directed = FALSE)
+nodes <- get.vertex.attribute(gr_NP)
+color_nodes <- rep("red", length(nodes$name))
+
+for (gene in seq_along(nodes$name)){
+  if (length(grep("^R_",nodes$name[gene])==1)==1){
+    color_nodes[gene] <- "yellow"
+  } else if(length(grep("^D_",nodes$name[gene])==1)==1){
+    color_nodes[gene] <- "lightblue"
+  }
+}
+
+set.seed(1)
+plot(gr_NP, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NP)$value - .7) * 20,
+     vertex.color = color_nodes)
+plot.new()
+legend("center", c("Donors", "Recipients", "D-R"),
+       col = c("lightblue", "yellow", "red"),
+       pch=19)
+```
+
+Color the nodes based on the group in which they are most expressed (non, primary or secondary tolerant):
+```{r}
+cytof_filt$group <- cytof$D_group
+gr_medians <- cytof_filt %>%
+  group_by(group) %>%
+  summarize_if(is.numeric, median) %>%
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+
+```{r}
+color_nodes <- rep("red", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+rownames(medians) <- tolower(rownames(medians))
+for (gene in seq_along(colnames(medians))){
+  if (medians["secondary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "blue"
+  } else if(medians["primary_tolerant", gene]  == max(medians[, gene])){
+    color_nodes[gene] <- "green"
+  }
+}
+
+set.seed(1)
+plot(gr_NP, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NP)$value - .7) * 20,
+     vertex.color = color_nodes)
+
+plot.new()
+legend("center", c("Non tolerant", "Secondary tolerant", "Primary tolerant"),
+       col = c("red", "blue", "green"),
+       pch=19)
+```
+
+Random forest :
+```{r}
+rf <- ranger::ranger(group~., cytof_filt, num.trees = 5000, importance = "impurity",mtry = 15)
+rf
+rf$confusion.matrix
+```
+
+```{r}
+rft_nt <- rf_tol_non_tol(cytof_filt, ntree = 5000, mtry = 15, package_2use = "ranger")
+rft_nt
+rft_nt$confusion.matrix
+```
+
+```{r}
+rft <- rf_tol1_tol2(cytof_filt, ntree = 5000, mtry = 15, package_2use = "ranger")
+rft
+rft$confusion.matrix
+```
+
+## Analysis on the recipients:
+
+I load the data corresponding to the top 100 variables from the CyTOF, metabolomics and RNAseq data for the recipients:
+
+```{r cars}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/recip_select.RData")
+recip_cyto <- recip_select
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/norm_data_recip_selec.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/recip_select.RData")
+which(colnames(recip_cyto)=="couple_nb")
+colnames(recip_cyto)[-which(colnames(recip_cyto)=="couple_nb")] <- paste0("cyto", colnames(recip_cyto)[-which(colnames(recip_cyto)=="couple_nb")])
+```
+
+Find the recipients in common between the different data sources:
+```{r}
+dfs <- list(
+              df1 = norm_data_recip_selec,
+              df2 = recip_cyto,
+              df3 = recip_select
+         )
+
+func <- function(...){
+  df1 = list(...)[[1]]
+  df2 = list(...)[[2]]
+  col1 = colnames(df1)[1]
+  col2 = colnames(df2)[1]
+  xxx = left_join(..., by = "couple_nb")#setNames(col2,col1))
+  return(xxx)
+}
+recip <- Reduce( func, dfs)
+
+recip <- recip[complete.cases(recip),]
+rownames(recip) <- recip$couple_nb
+recip_filtered <- as.data.frame(recip) %>% 
+  dplyr::select(-c("Id.Cryostem.R.x", "Id.Cryostem.R.y", "cytoId.Cryostem.R", "couple_nb", "cytogroup", "group.x", "group.y") )
+```
+
+Color the nodes based on the data source:
+```{r}
+correlations_non_prim <- recip_filtered %>%
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>%
+  dplyr::filter(var1 < var2)
+
+cor_non_prim_features <- correlations_non_prim[which(correlations_non_prim$value > 0.8),]
+
+gr_NP <- graph_from_data_frame(cor_non_prim_features, directed = FALSE)
+nodes <- get.vertex.attribute(gr_NP)
+color_nodes <- rep("red", length(nodes$name))
+
+for (gene in seq_along(nodes$name)){
+  if (length(grep("^R_",nodes$name[gene])==1)==1){
+    color_nodes[gene] <- "yellow"
+  } else if(length(grep("^cyto",nodes$name[gene])==1)==1){
+    color_nodes[gene] <- "lightblue"
+  }
+}
+
+set.seed(1)
+plot(gr_NP, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NP)$value - .7) * 20,
+     vertex.color = color_nodes)
+
+plot.new()
+legend("center", c("CyTOF", "Metabolites", "RNAseq"),
+       col = c("lightblue", "yellow", "red"),
+       pch=19)
+```
+
+Color the nodes based on the group in which they are most expressed (non, primary or secondary tolerant):
+```{r}
+recip_filtered$group <- recip$group.x
+gr_medians <- recip_filtered %>%
+  group_by(group) %>%
+  summarize_if(is.numeric, median) %>%
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+
+```{r}
+color_nodes <- rep("red", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+rownames(medians) <- tolower(rownames(medians))
+for (gene in seq_along(colnames(medians))){
+  if (medians["secondary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "blue"
+  } else if(medians["primary_tolerant", gene]  == max(medians[, gene])){
+    color_nodes[gene] <- "green"
+  }
+}
+set.seed(1)
+plot(gr_NP, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NP)$value - .7) * 20,
+     vertex.color = color_nodes)
+```
+
+Random forest :
+```{r}
+recip_filtered$group <- as.factor(tolower(recip_filtered$group))
+rf <- ranger::ranger(group~., recip_filtered, num.trees = 5000, importance = "impurity",mtry = 15)
+rf
+rf$confusion.matrix
+```
+
+```{r}
+rft_nt <- rf_tol_non_tol(recip_filtered, ntree = 5000, mtry = 15, package_2use = "ranger")
+rft_nt
+rft_nt$confusion.matrix
+```
+
+```{r}
+rft <- rf_tol1_tol2(recip_filtered, ntree = 5000, mtry = 15, package_2use = "randomForest")
+rft
+rft$confusion.matrix
+```
+
+## Analysis on the donors:
+
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/donors/donor_select.RData")
+laod("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/norm_data_donors_selec.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/donor_select.RData")
+```
+
+## Analysis on the d-r:
+
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/dr_select.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/subst_dr_selec.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/dr_select.RData")
+```
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.

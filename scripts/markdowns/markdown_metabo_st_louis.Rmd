@@ -1,0 +1,1496 @@
+---
+title: "Metabolomics_St_Louis"
+author: "helena"
+date: "26/03/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r imports, echo=FALSE, results='hide', warning = FALSE}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(openxlsx)
+  library(metabolomics)
+  library(BioGVHD)
+  library(tidyverse)
+  library(data.table)
+  library(dendextend)
+  library(ggplot2)
+  library(mlbench)
+  library(caret)
+  library(nnet)
+  library(pROC)
+  library(igraph)
+  library(VennDiagram)
+})
+options("scipen"=100)
+```
+
+
+## Preprocessing of the data
+
+I first read in the data:
+
+```{r load_data}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+
+info <- extract_info_metabo(metadata_file = samp_rd,
+                            metabo_file = "~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Metabo/Metabolomic local cohort Saint-Louis_filtered.xlsx")
+rd_meta <- info$subset_meta
+meta_metabo <- info$meta_metabo
+data_metabolites <- info$data_metabolites
+```
+
+I then filter out the metabolies that are xenobiotics drugs, as well as the metabolites which are not common to both the St Louis and the Cryostem cohort:
+
+```{r}
+data_metabolites <- data_metabolites[,-which((meta_metabo[2,]=="Xenobiotics")&(meta_metabo[1,]=="Drug"))] # rm drug xenobiotics
+data_metabo_national <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Metabo/Metabo NATIONAL cohort CRYOSTEM.xlsx")
+national_metabolites <- data_metabo_national$X1[-c(1,2)]
+# remove metabolites that are not present in both the national and the St_Louis cohort :
+data_metabolites <- data_metabolites[,which(colnames(data_metabolites) %in% national_metabolites)]
+```
+
+Then, I filter out the metabolites for which we have more than 50% of missing values in all our sub-groups (donors or recipients, non-tolerant, tolerant 1 or tolerant 2):
+
+```{r generate_david_figure, echo = FALSE}
+names_patients <- rownames(data_metabolites)
+
+big_mat <- data_metabolites %>%
+  mutate_all(as.numeric) %>%
+  mutate(METABONAME = names_patients) %>%
+  left_join(rd_meta[,c("GROUP", "COUPLENUMBER", "METABONAME")], by = "METABONAME") %>%
+  mutate(status = ifelse(test = grepl("D", METABONAME), yes = "D", no = "R"))
+
+na_pctgs <- big_mat %>%
+  group_by(GROUP, status) %>%
+  summarize_all(funs(sum(is.na(.)) / length(.)))
+
+melted <- melt(na_pctgs, id = 1:2)
+
+to_rm <- lapply(names(table(melted$variable)), function(metabolite){
+  values <- melted$value[which(melted$variable == metabolite)]
+  all(values > 0.5)
+})
+
+names2rm <- as.character(names(table(melted$variable))[which(to_rm == T)])
+plot2rm <- melted[which(melted$variable %in% names2rm),]
+table_pctg_na <- plot2rm %>% arrange(status) %>%
+  mutate(variable = paste0(variable, GROUP))
+
+ggplot(data = table_pctg_na,
+       mapping = aes(x = variable, fill = GROUP,
+                     y = ifelse(test = status == "D",
+                                yes = -value, no = value))) +
+  geom_bar(stat = "identity") +
+  scale_y_continuous(labels = abs, limits = max(table_pctg_na$value) * c(-1,1)) +
+  labs(y = "pctg of NA") +
+  coord_flip()
+
+high_na <- which(to_rm==T)
+data_metabo <- data_metabolites[ , -high_na]
+```
+
+I then replace the missing values by 1/2 of the smallest value measured for each metabolite plus some noise:
+
+```{r, results = 'hide', message = FALSE, warning = FALSE}
+for(i in 1:ncol(data_metabo)){ #replace remaining NA by 1/2 min column value + noise
+  x <- data_metabo[,i]
+  to_replace <- data_metabo[is.na(x),i]
+  with_noise <- jitter(rep(0.5*(min(as.numeric(x[-which(is.na(x))]))), length(to_replace)))
+  data_metabo[is.na(x),i] <- with_noise
+}
+```
+
+
+I then filter out the metabolites that do not vary enough across patients:
+
+```{r}
+sds <- apply(data_metabo,2,sd)
+plot(sort(sds), type = "l", ylim = c(0,10^7))
+abline(h=quantile(sds, 0.23), col="red")
+data_metabo <- data_metabo[,which(sds>=quantile(sds, 0.23))]
+rnames <- rownames(data_metabo)
+data_metabo <- apply(data_metabo,2,as.numeric)
+rownames(data_metabo) <- rnames
+```
+
+And I finally log-transform, normalise and save the data : 
+
+```{r}
+mat2use <- merge.data.frame(as.data.frame(rd_meta[,2], row.names = rownames(rd_meta)),
+                            data_metabo, by = "row.names") %>%
+  tibble::column_to_rownames(var="Row.names")
+
+logdata <- LogTransform(mat2use)
+normdata <- Normalise(logdata$output, method = "median")
+colnames(normdata$output) <- colnames(logdata$output)
+norm_data <- normdata$output
+
+# merge dataframes:
+big_mat <- merge.data.frame(normdata$output, rd_meta, by = "row.names") %>%
+  tibble::column_to_rownames("Row.names")
+
+logdata <- logdata$output
+meta_metabo <- meta_metabo[,which(as.character(meta_metabo[3,])%in%colnames(norm_data))] # only selected metabolites
+```
+
+# Analysis on the recipients :
+
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/recip/norm_data.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/recip/meta_metabo.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/recip/big_mat.RData")
+norm_data$Group <- as.factor(norm_data$Group)
+```
+
+Random forest on the recipients only : 
+```{r, echo = FALSE}
+colnames(norm_data) <- make.names(colnames(norm_data))
+
+rf_recip <- randomForest::randomForest(Group~., norm_data, mtry = 40)
+rf_recip
+```
+
+Trying to classify between non tolerant and tolerant patients:
+
+```{r, echo=FALSE}
+colnames(norm_data)[1] <- "group"
+norm_data$group <- as.factor(tolower(norm_data$group))
+
+set.seed(1)
+rf1 <- rf_tol_non_tol(df_orig = norm_data, mtry = 30, ntree = 10000)
+rf1
+```
+
+```{r}
+features_idx <- which(rf1$importance[,3]>=0.01)
+features_of_interest <-
+  rownames(rf1$importance)[features_idx]
+
+subst.mds <- cmdscale(1 - rf1$proximity, eig=TRUE)
+op <- par(pty="s")
+pairs(cbind(norm_data[,names(features_idx)], subst.mds$points), cex=0.6, gap=0,
+      col=c("red", "blue")[as.numeric(norm_data$group)],
+      main="Predictors and MDS of Proximity Based on RandomForest")
+```
+
+```{r}
+df_tmp <- norm_data %>% 
+  rownames_to_column("couplenb") %>%
+  arrange(group) %>% 
+  column_to_rownames("couplenb")
+
+annot_row <- as.data.frame(df_tmp$group)
+rownames(annot_row) <- rownames(df_tmp)
+
+pheatmap::pheatmap(df_tmp[names(features_idx)], cluster_rows = F, 
+                   annotation_row = annot_row, fontsize_row = 6)
+```
+
+Volcano plots between tolerant and non tolerant patients: 
+
+```{r}
+mat2use <- norm_data
+gr <- as.character(norm_data$group)
+gr[which(gr!= "non_tolerant")] <- "tolerant"
+mat2use$group <- as.factor(gr)
+
+res <- TwoGroup(mat2use)
+VolcanoPlot(res$output[,4], res$output[,2], cexlab = 0.6)
+MetBoxPlots(mat2use, "glycocholate",cols = c("blue","green"),main = "glycocholate")
+MetBoxPlots(mat2use, "taurocholate",cols = c("blue","green"),main = "taurocholate")
+MetBoxPlots(mat2use, "dehydroisoandrosterone.sulfate..DHEA.S.",cols = c("blue","green"),main = "dehydroisoandrosterone sulfate (DHEA-S)")
+MetBoxPlots(mat2use, "androstenediol..3beta.17beta..disulfate..2.",cols = c("blue","green"),main = "androstenediol (3beta,17beta) disulfate (2)")
+```
+
+Trying to classify only primary and seconday tolerant recipients:
+```{r, echo = FALSE}
+set.seed(1)
+rf_tol <- rf_tol1_tol2(df_orig = norm_data, mtry = 30, ntree = 10000)
+rf_tol
+```
+
+Volcano plots between primary and secondary tolerant patients: 
+
+```{r}
+mat2use <- norm_data[which(norm_data$group!="non_tolerant"),]
+
+res <- TwoGroup(mat2use)
+VolcanoPlot(res$output[,4], res$output[,2], cexlab = 0.6)
+MetBoxPlots(mat2use, "N.methylproline",cols = c("blue","green"),main = "N-methylproline")
+MetBoxPlots(mat2use, "chiro.inositol",cols = c("blue","green"),main = "chiro-inositol")
+MetBoxPlots(mat2use, "X1.7.dimethylurate",cols = c("blue","green"),main = "1,7-dimethylurate")
+MetBoxPlots(mat2use, "X1.methylurate",cols = c("blue","green"),main = "1-methylurate")
+```
+
+## Feature selection
+
+I apply feature selection to extract the metabolites which are correlated to the patients' outcome:
+```{r, cache=FALSE, results='hide', warning=FALSE, comment=FALSE, warning=FALSE, message = FALSE, include=FALSE}
+
+## fit a multinomial log linear model to every variable separately,
+## and extract the residual deviance (what has not been explained by the variable):
+model_stats_recip <- lapply(colnames(norm_data)[-1], function(variable){
+  fit_var <- multinom(group ~ eval(parse(text=variable)), data = norm_data)
+  
+  global_auc <- multiclass.roc(norm_data$group,fitted(fit_var))$auc[[1]]
+  auc_non_primary <- multiclass.roc(norm_data$group,fitted(fit_var),levels=c("non_tolerant","primary_tolerant"))$auc[[1]]
+  auc_non_secondary <- multiclass.roc(norm_data$group,fitted(fit_var),levels=c("non_tolerant","secondary_tolerant"))$auc[[1]]
+  auc_primary_secondary <- multiclass.roc(norm_data$group,fitted(fit_var),levels=c("primary_tolerant","secondary_tolerant"))$auc[[1]]
+  
+  return(lst(residual_var = fit_var$deviance, global_auc = global_auc, auc_non_primary = auc_non_primary,
+             auc_non_secondary = auc_non_secondary, auc_primary_secondary = auc_primary_secondary))
+})
+```
+
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r}
+gr_medians <- norm_data %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+Barplot of the residuals to see which metabolites explain the most of the inter group variance :
+```{r}
+residual_values <- purrr::map(model_stats_recip, 1)
+barplot(unlist(model_stats_recip))
+abline(h= 55, col = "red")
+```
+
+
+Names of the metabloites which are correlated to the patients' outcome:
+```{r}
+metabolires_of_interest_residuals <- colnames(norm_data)[which(residual_values <= 55)+1]
+metabolires_of_interest_residuals
+```
+
+Identifying the metabolites which best match with the patients outcome, 2 by 2 (non-tolerant versus tolerant 1,
+non-tolerant versus tolerant 2 and tolerant 1 versus tolerant 2):
+
+```{r}
+global_aucs <- purrr::map(model_stats_recip, 2)
+barplot(unlist(global_aucs))
+abline(h= 0.69, col = "red")
+```
+
+```{r}
+metabolites_of_interest_recip <- colnames(norm_data)[which(global_aucs >= 0.69)+1]
+metabolites_of_interest_recip
+```
+
+Which statistic (residuals or global auc) returns better features for modeling?
+```{r}
+set.seed(1)
+norm_data$group <- as.factor(norm_data$group)
+rf_residuals <- randomForest::randomForest(group~., norm_data[,c("group",metabolires_of_interest_residuals)])
+rf_residuals
+
+rf_aucs <- randomForest::randomForest(group~., norm_data[,c("group",metabolites_of_interest_recip)])
+rf_aucs
+```
+
+The AUCs seem to be at least as helpful as the residuals to select features in this case, I keep these features and look into them more into detail.
+
+I save the table of the top 100 metabolites in the recipients:
+```{r}
+samp_recip <- samp_rd[which(samp_rd$METABONAME %in% rownames(norm_data)),]
+rownames(samp_recip) <- samp_recip$METABONAME
+samp_recip <- samp_recip[rownames(norm_data),]
+
+norm_data_recip_selec <- norm_data[,metabolites_of_interest_recip]
+colnames(norm_data_recip_selec) <- paste0("R_", colnames(norm_data_recip_selec))
+norm_data_recip_selec <- norm_data_recip_selec %>% 
+  mutate("couple_nb" = samp_recip$COUPLENUMBER,
+         "group" = samp_recip$GROUP,
+         "Id.Cryostem.R" = samp_recip$Id.Cryostem.R)
+save(norm_data_recip_selec, 
+     file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/norm_data_recip_selec.RData")
+```
+
+I save the AUCs corresponding to these 100 top metabolites:
+```{r}
+recip_AUCs <- as.data.frame(metabolites_of_interest_recip) %>% 
+  mutate(auc = unlist(global_aucs[which(global_aucs >= 0.69)]))
+  
+save(recip_AUCs, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/recip_AUCs.RData")
+```
+
+
+Metabolites that help the most to predict between non-tolerant and primary tolerant recipients :
+
+```{r}
+non_prim_aucs <- purrr::map(model_stats_recip, 3)
+barplot(unlist(non_prim_aucs))
+abline(h= 0.85, col = "red")
+```
+
+```{r}
+non_prim_metabolites <- colnames(norm_data)[which(non_prim_aucs >= 0.85)+1]
+non_prim_metabolites
+```
+
+Which of these metabolites can be grouped together?
+The metabolites are colored in yellow in the graph because they correspond to the metabolites which most differ between non tolerant patients (that I always represent in red) and primary tolerant patients (that I always represent in green).
+```{r}
+recip_path <- "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/plots/metabo/recip/"
+
+correlations_non_prim <- norm_data[,non_prim_metabolites] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+cor_non_prim_features <- correlations_non_prim[which(correlations_non_prim$value > 0.8),]
+
+gr_NP <- graph_from_data_frame(cor_non_prim_features, directed = FALSE)
+plot(gr_NP, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NP)$value - .7) * 20,
+     vertex.color = "yellow")
+
+```
+
+Color the metabolites that are more expressed in the primary tolerant patients in green, and the ones that are more expressed in the non tolerant patients in red:
+
+```{r}
+nodes <- get.vertex.attribute(gr_NP)
+color_nodes <- rep("red", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] > medians["non_tolerant", gene]){
+    color_nodes[gene] <- "green"
+  }
+}
+
+pdf(paste0(recip_path, "NP.pdf"), width = 12, height = 8)
+plot(gr_NP, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NP)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr_NP, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NP)$value - .7) * 20,
+     vertex.color = color_nodes)
+```
+
+
+Metabolites that help the most to predict between non-tolerant and secondary tolerant recipients :
+
+```{r}
+non_sec_aucs <- purrr::map(model_stats_recip, 4)
+barplot(unlist(non_sec_aucs))
+abline(h= 0.85, col = "red")
+```
+
+```{r}
+non_sec_metabolites <- colnames(norm_data)[which(non_sec_aucs >= 0.85)+1]
+non_sec_metabolites
+```
+
+How are these metabolites correlated?
+These metabolites are colored in purple because they differ the most between non-tolerant (red) and secondary tolerant (blue) patients.
+```{r}
+correlations_non_sec <- norm_data[,non_sec_metabolites] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+cor_non_sec_features <- correlations_non_sec[which(correlations_non_sec$value > 0.8),]
+
+gr_NS <- graph_from_data_frame(cor_non_sec_features, directed = FALSE)
+plot(gr_NS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NS)$value - .7) * 20,
+     vertex.color = "purple")
+
+```
+
+Color the metabolites that are more expressed in the secondary tolerant patients in blue, and the ones that are more expressed in the non tolerant patients in red:
+
+```{r}
+nodes <- get.vertex.attribute(gr_NS)
+color_nodes <- rep("red", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["secondary_tolerant", gene] > medians["non_tolerant", gene]){
+    color_nodes[gene] <- "blue"
+  }
+}
+
+pdf(paste0(recip_path, "NS.pdf"), width = 12, height = 8)
+plot(gr_NS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NS)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr_NS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NS)$value - .7) * 20,
+     vertex.color = color_nodes)
+```
+
+
+
+Metabolites that help the most to predict between primary and secondary tolerant recipients :
+
+```{r}
+prim_sec_aucs <- purrr::map(model_stats_recip, 5)
+barplot(unlist(prim_sec_aucs))
+abline(h= 0.8, col = "red")
+```
+
+```{r}
+prim_sec_metabolites <- colnames(norm_data)[which(prim_sec_aucs >= 0.8)+1]
+prim_sec_metabolites
+```
+
+How are these metabolites correlated?
+These metabolites are colored in turquoise because they differ the most between primary-tolerant (green) and secondary tolerant (blue) patients.
+```{r}
+correlations_prim_sec <- norm_data[,prim_sec_metabolites] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+cor_prim_sec_features <- correlations_prim_sec[which(correlations_prim_sec$value > 0.7),]
+
+gr_PS <- graph_from_data_frame(cor_prim_sec_features, directed = FALSE)
+plot(gr_PS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_PS)$value - .7) * 20,
+     vertex.color = "turquoise")
+
+```
+
+Color the metabolites that are more expressed in the primary tolerant patients in green, and the ones that are more expressed in the secondary tolerant patients in blue:
+
+```{r}
+nodes <- get.vertex.attribute(gr_PS)
+color_nodes <- rep("blue", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] > medians["secondary_tolerant", gene]){
+    color_nodes[gene] <- "green"
+  }
+}
+
+pdf(paste0(recip_path, "PS.pdf"), width = 12, height = 8)
+plot(gr_PS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_PS)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr_PS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_PS)$value - .7) * 20,
+     vertex.color = color_nodes)
+```
+
+
+
+More global approach: over all metabolites of interest, no matter if they separate non-tol from primary, non-tol from secondary... 
+Group the metabolites that are associated with the outcome (= the "metabolites of interest") together, by finding the ones that are most correlated between them:
+
+```{r}
+#cor(norm_data[,metabolites_of_interest[1]], norm_data[,metabolites_of_interest[2]])
+correlations <- norm_data[,metabolites_of_interest_recip] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+```
+
+
+```{r}
+correlated_features <- correlations[which(correlations$value > 0.8),]
+```
+
+```{r}
+library(igraph)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20)
+```
+
+I color the metabolites based on the role they play in distinguishing non tolerant from primary, ...
+```{r}
+metabolite_colors <- rep("lightgrey", length(metabolites_of_interest_recip))
+metabolite_colors[which(metabolites_of_interest_recip %in% non_prim_metabolites)] <- "yellow"
+metabolite_colors[which(metabolites_of_interest_recip %in% non_sec_metabolites)] <- "purple"
+metabolite_colors[which(metabolites_of_interest_recip %in% prim_sec_metabolites)] <- "turquoise"
+
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20, 
+     vertex.color = metabolite_colors)
+```
+
+Color the metabolites that are more expressed in the primary tolerant patients in green, in the secondary tolerant patients in blue, and the ones that are more expressed in the non tolerant patients in red:
+
+```{r}
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("red", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["secondary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "blue"
+  } else if(medians["primary_tolerant", gene]  == max(medians[, gene])){
+    color_nodes[gene] <- "green"
+  }
+}
+
+pdf(paste0(recip_path, "all_small.pdf"), width = 12, height = 8)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes)
+```
+
+
+Same graph with more metabolites (with a lower cutoff on the metabolites of interest):
+
+```{r}
+global_aucs <- purrr::map(model_stats_recip, 2)
+barplot(unlist(global_aucs))
+abline(h= 0.65, col = "red")
+```
+
+```{r}
+metabolites_of_interest_r <- colnames(norm_data)[which(global_aucs >= 0.65)+1]
+metabolites_of_interest_r
+```
+
+
+```{r}
+#cor(norm_data[,metabolites_of_interest[1]], norm_data[,metabolites_of_interest[2]])
+correlations <- norm_data[,metabolites_of_interest_r] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+```
+
+
+```{r}
+correlated_features <- correlations[which(correlations$value > 0.8),]
+gr <- graph_from_data_frame(correlated_features, directed = FALSE)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20)
+```
+
+I color the metabolites based on the role they play in distinguishing non tolerant from primary, ...
+```{r}
+metabolite_colors <- rep("lightgrey", length(metabolites_of_interest_r))
+metabolite_colors[which(metabolites_of_interest_r %in% non_prim_metabolites)] <- "yellow"
+metabolite_colors[which(metabolites_of_interest_r %in% non_sec_metabolites)] <- "purple"
+metabolite_colors[which(metabolites_of_interest_r %in% prim_sec_metabolites)] <- "turquoise"
+
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20, 
+     vertex.color = metabolite_colors)
+```
+
+Color the metabolites that are more expressed in the primary tolerant patients in green, in the secondary tolerant patients in blue, and the ones that are more expressed in the non tolerant patients in red:
+
+```{r}
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("red", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["secondary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "blue"
+  } else if(medians["primary_tolerant", gene]  == max(medians[, gene])){
+    color_nodes[gene] <- "green"
+  }
+}
+
+pdf(paste0(recip_path, "all_big.pdf"), width = 12, height = 8)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes)
+```
+
+Random forest on the selected genes of the recipients only:
+```{r}
+set.seed(1)
+rf_r <- ranger::ranger(group~., norm_data[,c("group", metabolites_of_interest_r)], mtry = 40, num.trees = 1000,
+                           importance = "impurity")
+rf_r$confusion.matrix
+paste0("prediction error: ", rf_r$prediction.error*100)
+```
+Trying to classify between non tolerant and tolerant patients:
+
+```{r, echo=FALSE}
+set.seed(1)
+rf1 <- rf_tol_non_tol(df_orig = norm_data[,c("group", metabolites_of_interest_r)], mtry = 30, ntree = 10000, package_2use = "ranger")
+rf1$confusion.matrix
+paste0("prediction error: ", rf1$prediction.error*100)
+```
+
+Trying to classify only primary and secondary tolerant recipients:
+```{r, echo = FALSE}
+set.seed(1)
+rf_tol <- rf_tol1_tol2(df_orig = norm_data[,c("group", metabolites_of_interest_r)], mtry = 30, ntree = 10000, package_2use = "ranger")
+rf_tol$confusion.matrix
+paste0("prediction error: ", round(rf_tol$prediction.error*100, digits = 3))
+```
+
+# Analysis on the donors only :
+
+```{r, eval = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+
+info <- extract_info_metabo(metadata_file = samp_rd,
+                            metabo_file = "~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Metabo/Metabolomic local cohort Saint-Louis_filtered.xlsx")
+rd_meta <- info$subset_meta
+meta_metabo <- info$meta_metabo
+data_metabolites <- info$data_metabolites
+names_patients <- rownames(data_metabolites)[grep("D", rownames(data_metabolites))]
+data_metabo_national <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Metabo/Metabo NATIONAL cohort CRYOSTEM.xlsx")
+national_metabolites <- data_metabo_national$X1[-c(1,2)]
+donor_meta <- rd_meta[names_patients,]
+data_metabolites <- data_metabolites[,-which((meta_metabo[2,]=="Xenobiotics")&(meta_metabo[1,]=="Drug"))] # rm drug xenobiotics
+```
+
+
+```{r, eval= FALSE}
+##### filtering metabolites #####
+
+res_preprocessing <- metabo_preprocess(patient_type = "donors", data_metabolites, meta_metabo,
+                                       other_cohort_metabolites = national_metabolites, rd_meta, names_patients,
+                                       pdf_name = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/plots/metabo/donors/preprocess_removed_metabolites.pdf",
+                                       pdf_variance_name = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/plots/metabo/donors/preprocess_variance_cutoff.pdf",
+                                       save_results = T, save_res_repository = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/donors/")
+```
+
+Load in the data : 
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/donors/norm_data.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/donors/meta_metabo.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/donors/big_mat.RData")
+```
+
+Random forest on the donors only : 
+```{r, echo = FALSE}
+colnames(norm_data) <- make.names(colnames(norm_data))
+
+set.seed(1)
+rf_donor <- randomForest::randomForest(Group~., norm_data, mtry = 40)
+rf_donor
+```
+
+Trying to classify between non tolerant and tolerant patients:
+
+```{r, echo=FALSE}
+colnames(norm_data)[1] <- "group"
+norm_data$group <- tolower(norm_data$group)
+
+set.seed(1)
+rf1d <- rf_tol_non_tol(df_orig = norm_data, mtry = 30, ntree = 10000)
+rf1d
+```
+
+Trying to classify only primary and seconday tolerant donors:
+```{r, echo = FALSE}
+set.seed(1)
+rfd_tol <- rf_tol1_tol2(df_orig = norm_data, mtry = 30, ntree = 10000)
+rfd_tol
+```
+
+## Feature selection
+
+I apply feature selection to extract the metabolites which are correlated to the patients' outcome:
+```{r, cache=FALSE, results='hide', warning=FALSE, comment=FALSE, warning=FALSE, message = FALSE, include=FALSE}
+
+## fit a multinomial log linear model to every variable separately,
+## and extract the residual deviance (what has not been explained by the variable):
+model_stats_donors <- lapply(colnames(norm_data)[-1], function(variable){
+  fit_var <- multinom(group ~ eval(parse(text=variable)), data = norm_data)
+  
+  global_auc <- multiclass.roc(norm_data$group,fitted(fit_var))$auc[[1]]
+  auc_non_primary <- multiclass.roc(norm_data$group,fitted(fit_var),levels=c("non_tolerant","primary_tolerant"))$auc[[1]]
+  auc_non_secondary <- multiclass.roc(norm_data$group,fitted(fit_var),levels=c("non_tolerant","secondary_tolerant"))$auc[[1]]
+  auc_primary_secondary <- multiclass.roc(norm_data$group,fitted(fit_var),levels=c("primary_tolerant","secondary_tolerant"))$auc[[1]]
+  
+  return(lst(residual_var = fit_var$deviance, global_auc = global_auc, auc_non_primary = auc_non_primary,
+             auc_non_secondary = auc_non_secondary, auc_primary_secondary = auc_primary_secondary))
+})
+```
+
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r}
+gr_medians <- norm_data %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+Identifying the top 100 metabolites which best match with the patients outcome, 2 by 2 (non-tolerant versus tolerant 1,
+non-tolerant versus tolerant 2 and tolerant 1 versus tolerant 2):
+
+```{r}
+global_aucs <- purrr::map(model_stats_donors, 2)
+barplot(unlist(global_aucs))
+abline(h= 0.65, col = "red")
+```
+
+```{r}
+metabolites_of_interest_donors <- colnames(norm_data)[which(global_aucs >= 0.65)+1]
+metabolites_of_interest_donors
+```
+
+I save the table of the top 100 metabolites in the donors:
+```{r}
+samp_donor <- samp_rd[which(samp_rd$METABONAME %in% rownames(norm_data)),]
+rownames(samp_donor) <- samp_donor$METABONAME
+samp_donor <- samp_donor[rownames(norm_data),]
+
+norm_data_donors_selec <- norm_data[,metabolites_of_interest_donors]
+colnames(norm_data_donors_selec) <- paste0("D_", colnames(norm_data_donors_selec))
+norm_data_donors_selec <- norm_data_donors_selec %>% 
+  mutate("couple_nb" = samp_donor$COUPLENUMBER,
+         "group" = samp_donor$GROUP,
+         "Id.Cryostem.R" = samp_donor$Id.Cryostem.R)
+save(norm_data_donors_selec, 
+     file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/norm_data_donors_selec.RData")
+```
+
+I save the AUCs corresponding to these 100 top metabolites:
+```{r}
+donor_AUCs <- as.data.frame(metabolites_of_interest_donors) %>% 
+  mutate(auc = unlist(global_aucs[which(global_aucs >= 0.65)]))
+  
+save(donor_AUCs, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/donor_AUCs.RData")
+```
+
+
+Random forest on the features selected from the donors only:
+```{r, echo = FALSE}
+norm_data_donor_selec <- as.data.frame(norm_data[,c("group",metabolites_of_interest_donors)])
+norm_data_donor_selec$group <- as.factor(norm_data_donor_selec$group)
+
+rf_donor_selec <- randomForest::randomForest(group~., norm_data_donor_selec, mtry = 40)
+rf_donor_selec
+```
+
+Trying to classify between non tolerant and tolerant patients:
+
+```{r, echo=FALSE}
+set.seed(1)
+rf1d_selec <- rf_tol_non_tol(df_orig = norm_data_donor_selec, mtry = 30, ntree = 10000)
+rf1d_selec
+```
+
+```{r}
+non_prim_aucs <- purrr::map(model_stats_donors, 3)
+non_prim_metabolites <- colnames(norm_data)[which(non_prim_aucs >= 0.78)+1]
+non_prim_metabolites
+```
+
+Which of these metabolites can be grouped together?
+Color the metabolites that are more expressed in the primary tolerant patients in green, and the ones that are more expressed in the non tolerant patients in red:
+
+```{r}
+donor_path <- "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/plots/metabo/donors/"
+
+correlations_non_prim <- norm_data[,non_prim_metabolites] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+cor_non_prim_features <- correlations_non_prim[which(correlations_non_prim$value > 0.8),]
+
+gr_NP <- graph_from_data_frame(cor_non_prim_features, directed = FALSE)
+
+nodes <- get.vertex.attribute(gr_NP)
+color_nodes <- rep("red", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] > medians["non_tolerant", gene]){
+    color_nodes[gene] <- "green"
+  }
+}
+pdf(paste0(donor_path, "NP.pdf"), width = 12, height = 8)
+plot(gr_NP, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NP)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr_NP, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NP)$value - .7) * 20,
+     vertex.color = color_nodes)
+```
+
+
+Metabolites that help the most to predict between non-tolerant and secondary tolerant recipients :
+
+```{r}
+non_sec_aucs <- purrr::map(model_stats_donors, 4)
+barplot(unlist(non_sec_aucs))
+abline(h= 0.85, col = "red")
+```
+
+```{r}
+non_sec_metabolites <- colnames(norm_data)[which(non_sec_aucs >= 0.78)+1]
+non_sec_metabolites
+```
+
+How are these metabolites correlated?
+Color the metabolites that are more expressed in the secondary tolerant patients in blue, and the ones that are more expressed in the non tolerant patients in red:
+```{r}
+correlations_non_sec <- norm_data[,non_sec_metabolites] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+cor_non_sec_features <- correlations_non_sec[which(correlations_non_sec$value > 0.8),]
+
+gr_NS <- graph_from_data_frame(cor_non_sec_features, directed = FALSE)
+
+nodes <- get.vertex.attribute(gr_NS)
+color_nodes <- rep("red", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["secondary_tolerant", gene] > medians["non_tolerant", gene]){
+    color_nodes[gene] <- "blue"
+  }
+}
+
+pdf(paste0(donor_path, "NS.pdf"), width = 12, height = 8)
+plot(gr_NS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NS)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr_NS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NS)$value - .7) * 20,
+     vertex.color = color_nodes)
+
+```
+
+Metabolites that help the most to predict between primary and secondary tolerant donors :
+
+```{r}
+prim_sec_aucs <- purrr::map(model_stats_donors, 5)
+barplot(unlist(prim_sec_aucs))
+abline(h= 0.8, col = "red")
+```
+
+```{r}
+prim_sec_metabolites <- colnames(norm_data)[which(prim_sec_aucs >= 0.78)+1]
+prim_sec_metabolites
+```
+
+How are these metabolites correlated?
+Color the metabolites that are more expressed in the primary tolerant patients in green, and the ones that are more expressed in the secondary tolerant patients in blue:v
+```{r}
+correlations_prim_sec <- norm_data[,prim_sec_metabolites] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+cor_prim_sec_features <- correlations_prim_sec[which(correlations_prim_sec$value > 0.7),]
+
+gr_PS <- graph_from_data_frame(cor_prim_sec_features, directed = FALSE)
+
+nodes <- get.vertex.attribute(gr_PS)
+color_nodes <- rep("blue", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] > medians["secondary_tolerant", gene]){
+    color_nodes[gene] <- "green"
+  }
+}
+
+pdf(paste0(donor_path, "PS.pdf"), width = 12, height = 8)
+plot(gr_PS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_PS)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr_PS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_PS)$value - .7) * 20,
+     vertex.color = color_nodes)
+
+```
+
+More global approach: over all metabolites of interest, no matter if they separate non-tol from primary, non-tol from secondary... 
+Group the metabolites that are associated with the outcome (= the "metabolites of interest") together, by finding the ones that are most correlated between them:
+
+```{r}
+#cor(norm_data[,metabolites_of_interest[1]], norm_data[,metabolites_of_interest[2]])
+correlations <- norm_data[,metabolites_of_interest_donors] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+```
+
+
+```{r}
+correlated_features <- correlations[which(correlations$value > 0.8),]
+```
+
+Color the metabolites that are more expressed in the primary tolerant patients in green, in the secondary tolerant patients in blue, and the ones that are more expressed in the non tolerant patients in red:
+
+```{r}
+gr <- graph_from_data_frame(correlated_features, directed = FALSE)
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("red", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["secondary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "blue"
+  } else if(medians["primary_tolerant", gene]  == max(medians[, gene])){
+    color_nodes[gene] <- "green"
+  }
+}
+
+pdf(paste0(donor_path, "all.pdf"), width = 12, height = 8)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes)
+```
+
+Random forest on the selected genes of the donors only:
+```{r}
+set.seed(1)
+rf_d <- ranger::ranger(group~., norm_data[,c("group", metabolites_of_interest_donors)], mtry = 40, num.trees = 1000,
+                           importance = "impurity")
+rf_d$confusion.matrix
+paste0("prediction error: ", rf_d$prediction.error*100)
+```
+Trying to classify between non tolerant and tolerant patients:
+
+```{r, echo=FALSE}
+set.seed(1)
+rf1 <- rf_tol_non_tol(df_orig = norm_data[,c("group", metabolites_of_interest_donors)], mtry = 30, ntree = 10000, package_2use = "ranger")
+rf1$confusion.matrix
+paste0("prediction error: ", rf1$prediction.error*100)
+```
+
+Trying to classify only primary and secondary tolerant recipients:
+```{r, echo = FALSE}
+set.seed(1)
+rf_tol <- rf_tol1_tol2(df_orig = norm_data[,c("group", metabolites_of_interest_donors)], mtry = 30, ntree = 10000, package_2use = "ranger")
+rf_tol$confusion.matrix
+paste0("prediction error: ", round(rf_tol$prediction.error*100, digits = 3))
+```
+
+# Analysis on the donors - recipients :
+
+In order to investigate into the differences between the recipients' metabolite profile compared to the original profile of their donor, I'm running the same analysis on the donors-recipients (matched per couple of course)
+
+```{r, results = 'hide'}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/logdata.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/meta_metabo.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/big_mat.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/rd_meta.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/r&d/norm_data.RData")
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+
+vars2rm <- colnames(rd_meta)[-c(4, 10)]
+big_mat2 <- big_mat %>%
+  group_by(COUPLENUMBER) %>%
+  dplyr::select(-vars2rm)
+
+subst <- big_mat2 %>%
+  summarise_if(is.numeric, ~.[1]-.[2])
+
+samp_rd_subst <- samp_rd[which(samp_rd$COUPLENUMBER %in% subst$COUPLENUMBER),] %>% 
+  arrange(COUPLENUMBER) %>% 
+  dplyr::select(c("GROUP", "COUPLENUMBER")) %>% 
+  unique()
+
+subst <- subst %>% 
+  mutate("couple" = paste0("couple_",COUPLENUMBER),
+         "group" = samp_rd_subst$GROUP) %>% 
+  column_to_rownames("couple") %>% 
+  dplyr::select (-"COUPLENUMBER") 
+
+subst <- subst[c(541, 1:540)]
+
+colnames(subst) <- make.names(colnames(subst))
+colnames(subst)[-1] <- paste0("subst_", colnames(subst))[-1]
+```
+
+Random forest on the donors - recipients:
+```{r}
+subst$group <- as.factor(subst$group)
+colnames(subst) <- make.names(colnames(subst))
+
+set.seed(1)
+rf_subst <- randomForest::randomForest(group~., subst, mtry = 40)
+rf_subst
+```
+
+Trying to classify between non tolerant and tolerant patients:
+
+```{r, echo=FALSE}
+subst$group <- tolower(subst$group)
+
+set.seed(1)
+rf1_subst <- rf_tol_non_tol(df_orig = subst, mtry = 30, ntree = 10000)
+rf1_subst
+```
+
+Trying to classify only primary and seconday tolerant recipients:
+```{r, echo = FALSE}
+set.seed(1)
+rf_subst_tol <- rf_tol1_tol2(df_orig = subst, mtry = 30, ntree = 10000)
+rf_subst_tol
+```
+
+## Feature selection
+
+I apply feature selection to extract the metabolites which are correlated to the patients' outcome:
+```{r, cache=FALSE, results='hide', warning=FALSE, comment=FALSE, warning=FALSE, message = FALSE, include=FALSE}
+
+## fit a multinomial log linear model to every variable separately,
+## and extract the residual deviance (what has not been explained by the variable):
+model_stats_dr <- lapply(colnames(subst)[-1], function(variable){
+  fit_var <- multinom(group ~ eval(parse(text=variable)), data = subst)
+  
+  global_auc <- multiclass.roc(subst$group,fitted(fit_var))$auc[[1]]
+  auc_non_primary <- multiclass.roc(subst$group,fitted(fit_var),levels=c("non_tolerant","primary_tolerant"))$auc[[1]]
+  auc_non_secondary <- multiclass.roc(subst$group,fitted(fit_var),levels=c("non_tolerant","secondary_tolerant"))$auc[[1]]
+  auc_primary_secondary <- multiclass.roc(subst$group,fitted(fit_var),levels=c("primary_tolerant","secondary_tolerant"))$auc[[1]]
+  
+  return(lst(residual_var = fit_var$deviance, global_auc = global_auc, auc_non_primary = auc_non_primary,
+             auc_non_secondary = auc_non_secondary, auc_primary_secondary = auc_primary_secondary))
+})
+```
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r}
+gr_medians <- subst %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+Identifying the top 100 metabolites which best match with the patients outcome, 2 by 2 (non-tolerant versus tolerant 1,
+non-tolerant versus tolerant 2 and tolerant 1 versus tolerant 2):
+
+```{r}
+global_aucs <- purrr::map(model_stats_dr, 2)
+barplot(unlist(global_aucs))
+abline(h= 0.675, col = "red")
+```
+
+```{r}
+metabolites_of_interest_dr <- colnames(subst)[which(global_aucs >= 0.675)+1]
+metabolites_of_interest_dr
+```
+
+Generate a matrix with the selected metabolites only:
+```{r}
+subst_dr_selec <- subst[,c("group", make.names(metabolites_of_interest_dr))]
+subst_dr_selec$group <- as.factor(tolower(subst_dr_selec$group))
+colnames(subst_dr_selec)[-1] <- paste0("DR_",colnames(subst_dr_selec)[-1])
+subst_dr_selec <- subst_dr_selec %>% 
+  rownames_to_column("couple_nb")
+subst_dr_selec$couple_nb <- gsub("couple_", "", subst_dr_selec$couple_nb)
+
+save(subst_dr_selec, 
+     file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/subst_dr_selec.RData")
+```
+
+I save the AUCs corresponding to these 100 top metabolites:
+```{r}
+dr_AUCs <- as.data.frame(metabolites_of_interest_dr) %>% 
+  mutate(auc = unlist(global_aucs[which(global_aucs >= 0.675)]))
+  
+save(dr_AUCs, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/dr_AUCs.RData")
+```
+
+```{r}
+non_prim_aucs <- purrr::map(model_stats_dr, 3)
+non_prim_metabolites <- colnames(subst)[which(non_prim_aucs >= 0.78)+1]
+non_prim_metabolites
+```
+
+Which of these metabolites can be grouped together?
+Color the metabolites that are more expressed in the primary tolerant patients in green, and the ones that are more expressed in the non tolerant patients in red:
+
+```{r}
+dr_path <- "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/plots/metabo/rd/"
+
+correlations_non_prim <- subst[,non_prim_metabolites] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+cor_non_prim_features <- correlations_non_prim[which(correlations_non_prim$value > 0.8),]
+
+gr_NP <- graph_from_data_frame(cor_non_prim_features, directed = FALSE)
+
+nodes <- get.vertex.attribute(gr_NP)
+color_nodes <- rep("red", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] > medians["non_tolerant", gene]){
+    color_nodes[gene] <- "green"
+  }
+}
+
+pdf(paste0(dr_path, "NP.pdf"), width = 12, height = 8)
+plot(gr_NP, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NP)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr_NP, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NP)$value - .7) * 20,
+     vertex.color = color_nodes)
+```
+
+
+Metabolites that help the most to predict between non-tolerant and secondary tolerant recipients :
+
+```{r}
+non_sec_aucs <- purrr::map(model_stats_donors, 4)
+barplot(unlist(non_sec_aucs))
+abline(h= 0.85, col = "red")
+```
+
+```{r}
+non_sec_metabolites <- colnames(subst)[which(non_sec_aucs >= 0.78)+1]
+non_sec_metabolites
+```
+
+How are these metabolites correlated?
+Color the metabolites that are more expressed in the secondary tolerant patients in blue, and the ones that are more expressed in the non tolerant patients in red:
+```{r}
+correlations_non_sec <- subst[,non_sec_metabolites] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+cor_non_sec_features <- correlations_non_sec[which(correlations_non_sec$value > 0.8),]
+
+gr_NS <- graph_from_data_frame(cor_non_sec_features, directed = FALSE)
+
+nodes <- get.vertex.attribute(gr_NS)
+color_nodes <- rep("red", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["secondary_tolerant", gene] > medians["non_tolerant", gene]){
+    color_nodes[gene] <- "blue"
+  }
+}
+
+pdf(paste0(dr_path, "NS.pdf"), width = 12, height = 8)
+plot(gr_NS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NS)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr_NS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_NS)$value - .7) * 20,
+     vertex.color = color_nodes)
+
+```
+
+Metabolites that help the most to predict between primary and secondary tolerant donors :
+
+```{r}
+prim_sec_aucs <- purrr::map(model_stats_donors, 5)
+barplot(unlist(prim_sec_aucs))
+abline(h= 0.8, col = "red")
+```
+
+```{r}
+prim_sec_metabolites <- colnames(subst)[which(prim_sec_aucs >= 0.78)+1]
+prim_sec_metabolites
+```
+
+How are these metabolites correlated?
+Color the metabolites that are more expressed in the primary tolerant patients in green, and the ones that are more expressed in the secondary tolerant patients in blue:v
+```{r}
+correlations_prim_sec <- subst[,prim_sec_metabolites] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+cor_prim_sec_features <- correlations_prim_sec[which(correlations_prim_sec$value > 0.7),]
+
+gr_PS <- graph_from_data_frame(cor_prim_sec_features, directed = FALSE)
+
+nodes <- get.vertex.attribute(gr_PS)
+color_nodes <- rep("blue", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] > medians["secondary_tolerant", gene]){
+    color_nodes[gene] <- "green"
+  }
+}
+
+pdf(paste0(dr_path, "PS.pdf"), width = 12, height = 8)
+plot(gr_PS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_PS)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr_PS, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr_PS)$value - .7) * 20,
+     vertex.color = color_nodes)
+
+```
+
+More global approach: over all metabolites of interest, no matter if they separate non-tol from primary, non-tol from secondary... 
+Group the metabolites that are associated with the outcome (= the "metabolites of interest") together, by finding the ones that are most correlated between them:
+
+```{r}
+#cor(norm_data[,metabolites_of_interest[1]], norm_data[,metabolites_of_interest[2]])
+correlations <- subst[,metabolites_of_interest_dr] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+```
+
+
+```{r}
+correlated_features <- correlations[which(correlations$value > 0.8),]
+```
+
+Color the metabolites that are more expressed in the primary tolerant patients in green, in the secondary tolerant patients in blue, and the ones that are more expressed in the non tolerant patients in red:
+
+```{r}
+gr <- graph_from_data_frame(correlated_features, directed = FALSE)
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("red", length(nodes$name))
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["secondary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "blue"
+  } else if(medians["primary_tolerant", gene]  == max(medians[, gene])){
+    color_nodes[gene] <- "green"
+  }
+}
+
+pdf(paste0(dr_path, "all.pdf"), width = 12, height = 8)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes)
+dev.off()
+
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes)
+```
+
+Random forest on the selected genes of the donors only:
+```{r}
+set.seed(1)
+rf_dr <- ranger::ranger(group~., subst[,c("group", metabolites_of_interest_dr)], mtry = 40, num.trees = 1000,
+                           importance = "impurity")
+rf_dr$confusion.matrix
+paste0("prediction error: ", rf_dr$prediction.error*100)
+```
+Trying to classify between non tolerant and tolerant patients:
+
+```{r, echo=FALSE}
+set.seed(1)
+rf1 <- rf_tol_non_tol(df_orig = subst[,c("group", metabolites_of_interest_dr)], mtry = 30, ntree = 10000, package_2use = "ranger")
+rf1$confusion.matrix
+paste0("prediction error: ", rf1$prediction.error*100)
+```
+
+Trying to classify only primary and secondary tolerant recipients:
+```{r, echo = FALSE}
+set.seed(1)
+rf_tol <- rf_tol1_tol2(df_orig = subst[,c("group", metabolites_of_interest_dr)], mtry = 30, ntree = 10000, package_2use = "ranger")
+rf_tol$confusion.matrix
+paste0("prediction error: ", round(rf_tol$prediction.error*100, digits = 3))
+```
+
+# Analysis on the donors, recipients, and D-R
+
+Which of the three hold the most information to perform classification?
+
+Plot the AUCs of the 100 top metabolites from every data source (D, R, D-R)
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/donor_AUCs.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/recip_AUCs.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/dr_AUCs.RData")
+
+all_aucs <- c(recip_AUCs$auc, dr_AUCs$auc, donor_AUCs$auc)
+all_aucs_orig <- c(rep("R", nrow(donor_AUCs)),
+                   rep("DR", nrow(recip_AUCs)),
+                   rep("D", nrow(dr_AUCs)))
+barplot(all_aucs, col = as.factor(all_aucs_orig), ylim = c(0.6, 0.95))
+legend("topright", legend = c("Recip_AUCs", "D-R_AUCs", "Donor AUCs"),
+      col = c("green", "red", "black"), lty = 1)
+
+barplot(all_aucs[order(all_aucs, decreasing = T)], col = as.factor(all_aucs_orig[order(all_aucs, decreasing = T)]),
+        ylim= c(0.6, 0.95))
+legend("topright", legend = c("Recip_AUCs", "D-R_AUCs", "D AUCs"),
+      col = c("green", "red", "black"), lty = 1)
+```
+
+Percentage of every data origin in the top 100 metabolites once sorted per AUC:
+```{r}
+ordered_aucs_orig <- all_aucs_orig[order(all_aucs, decreasing = T)]
+table(ordered_aucs_orig[1:100])
+```
+
+Top 100 metabolites sorted on AUC:
+```{r}
+colnames(dr_AUCs) = colnames(donor_AUCs) = colnames(recip_AUCs) <- c("top_100_goi", "auc")
+dr_AUCs <- dr_AUCs %>% 
+  mutate(new_names = paste0("DR_", dr_AUCs[,1]))
+donor_AUCs <- donor_AUCs %>% 
+  mutate( new_names = paste0("D_", donor_AUCs[,1]))
+recip_AUCs <- recip_AUCs %>% 
+  mutate(new_names = paste0("R_", recip_AUCs[,1]))
+
+global_aucs <- rbind(recip_AUCs, dr_AUCs, donor_AUCs)
+ordered_global_aucs <- global_aucs[order(global_aucs$auc, decreasing = T),]
+ordered_global_aucs[1:100,]
+```
+
+
+Venndiagram plot:
+```{r}
+grid.newpage()
+venn.plot <- draw.triple.venn(length(recip_AUCs$auc), 
+                              length(donor_AUCs$auc),
+                              length(dr_AUCs$auc),
+                              length(which(recip_AUCs$top_100_goi %in% donor_AUCs$top_100_goi)),
+                              length(which(donor_AUCs$top_100_goi %in% dr_AUCs$top_100_goi)),
+                              length(which(recip_AUCs$top_100_goi %in% dr_AUCs$top_100_goi)),
+                              length(Reduce(intersect, list(recip_AUCs$top_100_goi,
+                                                            donor_AUCs$top_100_goi,
+                                                            dr_AUCs$top_100_goi))),
+                              c("R", "D", "D-R"), 
+                              fill = c("green", "black", "red"),
+                              alpha = rep(0.25, 3),
+                              lty = "blank",
+                              ind = TRUE)
+```
+
+```{r}
+print("Overlap between R and D : ")
+recip_AUCs$top_100_goi[which(recip_AUCs$top_100_goi %in% donor_AUCs$top_100_goi)]
+print("Overlap between D and D-R : ")
+donor_AUCs$top_100_goi[which(donor_AUCs$top_100_goi %in% dr_AUCs$top_100_goi)]
+print("Overlap between R and D-R : ")
+recip_AUCs$top_100_goi[which(recip_AUCs$top_100_goi %in% dr_AUCs$top_100_goi)]
+print("Overalp between all : ")
+Reduce(intersect, list(recip_AUCs$top_100_goi,
+                       donor_AUCs$top_100_goi,
+                       dr_AUCs$top_100_goi))
+```
+
+
+Random forest on the top 100 metabolites from every data source (D, R, D-R)
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/donors/norm_data.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/donors/big_mat.RData")
+
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/norm_data_recip_selec.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/norm_data_donors_selec.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/metabo/compar/subst_dr_selec.RData")
+```
+
+```{r}
+norm_data_donors_selec <- norm_data_donors_selec %>% 
+  mutate("COUPLENUMBER" = big_mat$COUPLENUMBER)
+
+norm_data_recip_selec <- norm_data_recip_selec %>% 
+  mutate("COUPLENUMBER" = big_mat$COUPLENUMBER)
+
+subst_dr_selec <- subst_dr_selec %>% 
+  rownames_to_column("COUPLENUMBER")
+
+subst_dr_selec$COUPLENUMBER <- as.numeric(gsub("couple_", "", subst_dr_selec$COUPLENUMBER))
+
+all_2 <- left_join(norm_data_donors_selec,
+                   norm_data_recip_selec,
+                   by = "COUPLENUMBER")
+
+all_3 <- left_join(all_2,
+                   subst_dr_selec,
+                   by = "COUPLENUMBER") %>% 
+  column_to_rownames("COUPLENUMBER")
+```
+
+```{r}
+set.seed(1)
+rf_all <- randomForest::randomForest(group~., all_3, mtry = 40)
+rf_all
+```
+
+Trying to classify between non tolerant and tolerant patients:
+
+```{r, echo=FALSE}
+set.seed(1)
+rf_all3 <- rf_tol_non_tol(df_orig = all_3, mtry = 30, ntree = 10000)
+rf_all3
+```
+
+In the top 100 metabolites in the model, which ones come from which origin?
+```{r}
+imp_rf <- rownames(rf_all3$importance)[order(rf_all3$importance[,3])]
+top_100_rf <- imp_rf[201:303]
+paste0("Number of recip metabolites: ",length(grep("^R_", top_100_rf)))
+paste0("Number of D-R metabolites: ",length(grep("^DR_", top_100_rf)))
+paste0("Number of donor metabolites: ",length(grep("^D_", top_100_rf)))
+```
+
+```{r}
+plot.new()
+randomForest::varImpPlot(rf_all3)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+# Analysis on the donors / recipients :
+
+In order to investigate into the differences between the recipients' metabolite profile compared to the original profile of their donor, I'm running the same analysis on the donors/recipients (matched per couple of course)
+
+DISCUSS WITH RUTH HOW THIS SHOULD BE DONE?
+
+```{r, eval = FALSE}
+frac <- big_mat2 %>%
+  summarise_if(is.numeric, ~log(1+ (.[1]/.[2])))
+```
+
+
+
+
+
+
+
+
