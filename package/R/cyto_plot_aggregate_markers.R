@@ -20,7 +20,7 @@ plot_aggregate_markers <- function(patient_names, samp_patients, color_by, prett
                                    pheno_marks, png_name, x_names, ff_agg ){
   samp_patients <- samp_patients %>% slice(match(names(patient_names), Id.Cryostem.R)) # reorder files as they are in ff_agg
   markersToPlot <- names(prettyMarkerNames)[which(prettyMarkerNames%in%pheno_marks)]
-  png(file.path(paste0(png_name)),
+  png(png_name,
       width = 9000,
       height = 4500)
   par(cex.lab = 2.5, mar = c(4.1,5.1,2.1,2.1))
@@ -40,8 +40,10 @@ plot_aggregate_markers <- function(patient_names, samp_patients, color_by, prett
     axis(side=1, at=seq_along(rownames(samp_patients)), labels=x_names, las=2,cex=0.7)
     points(ff_agg@exprs[,c("File_scattered",marker)],
            pch=".",
-           col = scales::hue_pal()(length(gr_levels))[factor(selected_column[ff_agg@exprs[,"File"]],
-                                                             levels=gr_levels)])
+           # col = scales::hue_pal()(length(gr_levels))[factor(selected_column[ff_agg@exprs[,"File"]],
+           #                                                   levels=gr_levels)])
+           col = c("goldenrod1", "darkorange1", "firebrick1", "black")[factor(selected_column[ff_agg@exprs[,"File"]],
+                                                               levels=gr_levels)])
     #medians <- tapply(ff_agg@exprs[,marker], ff_agg@exprs[,"File"], median)
     q01 <- tapply(ff_agg@exprs[,marker], ff_agg@exprs[,"File"], quantile, 0.01)
     q99 <- tapply(ff_agg@exprs[,marker], ff_agg@exprs[,"File"], quantile, 0.99)
@@ -51,7 +53,9 @@ plot_aggregate_markers <- function(patient_names, samp_patients, color_by, prett
 
   }
   plot.new()
-  legend("center",legend=gr_levels, col=scales::hue_pal()(length(gr_levels)),
+  # legend("center",legend=gr_levels, col=scales::hue_pal()(length(gr_levels)),
+  #        pch=19, cex=3)
+  legend("center",legend=gr_levels[c(4,1:3)], col = c("black", "goldenrod1", "darkorange1", "firebrick1"),
          pch=19, cex=3)
   dev.off()
 }
