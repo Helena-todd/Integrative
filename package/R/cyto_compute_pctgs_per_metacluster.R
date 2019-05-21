@@ -17,7 +17,7 @@
 #' @examples
 #' pctgs <- generate_pctgs(recip_names, fsom, pdf_name = "my_pdf.pdf", fcs_dir)
 generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir,
-                           min_ref, max_ref, files2rescale){
+                           min_ref = NULL, max_ref = NULL, files2rescale = NULL){
   pctgs <- matrix(
     0,
     length(recip_names),
@@ -25,6 +25,8 @@ generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir,
     dimnames = list(
       recip_names,
       as.character(1:fsom$FlowSOM$map$nNodes)))
+  outlier_info <- list()
+  outlier_pctg <- list()
   #i <- 1
   pdf(file = pdf_name)
   for (i in seq_along(recip_names)){
@@ -53,6 +55,19 @@ generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir,
     }
 
     fsom_tmp <- FlowSOM::NewData(fsom$FlowSOM, ff_t)
+    test_outliers <- TestOutliers(fsom_tmp, mad_allowed = 4,
+                                  fsom_reference = fsom)
+
+    outlier_info[[i]] <- test_outliers
+
+    max_outliers <- max(test_outliers$Number_of_outliers)
+    n_outliers <- sum(test_outliers$Number_of_outliers)
+
+    outlier_pctg[[i]] <- paste0(n_outliers, " cells (", round(n_outliers/nrow(fsom_tmp$data) *
+                                            100, 2), "%) seem far from their cluster centers.")
+
+
+
 
     mat_annot <- exprs(ff_t)
     file_id <- rep(i, nrow(ff_t))
@@ -100,5 +115,7 @@ generate_pctgs <- function(recip_names, fsom, pdf_name, fcs_dir, output_dir,
     flowCore::write.FCS(ff_updated, file_out)
   }
   dev.off()
-  return(pctgs)
+  return(list(pctgs = pctgs,
+              outlier_info = outlier_info,
+              outlier_pctg = outlier_pctg))
 }
