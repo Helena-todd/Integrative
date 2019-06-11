@@ -4,10 +4,12 @@
 \alias{perm_val_demo}
 \title{Permutations value with demographics}
 \usage{
-perm_val_demo(data, nb_perm, ind_feature, orig_AUC)
+perm_val_demo(data, big_mat, nb_perm, ind_feature, orig_AUC)
 }
 \arguments{
 \item{data}{A normalised dataset (dataframe with patients in rows and features in columns)}
+
+\item{big_mat}{The matrix containing clinical data}
 
 \item{nb_perm}{The number of permutations to generate the permutation distribution}
 
