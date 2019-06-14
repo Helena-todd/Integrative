@@ -27,10 +27,14 @@ samp_rd_all <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_co
 samp_rd_all$DATEOFCYTOFEXPERIMENT <- as.Date(samp_rd_all$DATEOFCYTOFEXPERIMENT, format = "%d.%m.%Y")
 
 ## Filter out data :
-samp_rd <- samp_rd_all %>%
+## I first select the couples that were selected by Laetitia (no clinical problem, enough delay and enough cells in CYTOF file)
+selec_couples <- samp_rd_all %>%
   dplyr::filter(DELAY_SAMPLE >= 148) %>%
-  dplyr::filter(!COUPLENUMBER %in% c(32, 71)) %>%
-  arrange(DATEOFCYTOFEXPERIMENT)#arrange(HOSPITAL,DATEOFCYTOFEXPERIMENT)
+  dplyr::filter(!COUPLENUMBER %in% c(32, 71, 50)) %>%
+  dplyr::select(COUPLENUMBER)
+
+
+samp_rd <- samp_rd_all[which(samp_rd_all$COUPLENUMBER %in% selec_couples$COUPLENUMBER),]
 
 save(samp_rd, file = "~/Documents/VIB/Projects/Integrative_Paris/National_cohort/samp_rd_national.RData")
 
