@@ -2,7 +2,7 @@
 % Please edit documentation in R/cyto_fcs_to_agg.R
 \name{fcs_to_agg}
 \alias{fcs_to_agg}
-\title{Title}
+\title{fcs_to_agg}
 \usage{
 fcs_to_agg(fcs_dir, fcs_names, seed, cTotal, output_name)
 }
@@ -19,9 +19,10 @@ fcs_to_agg(fcs_dir, fcs_names, seed, cTotal, output_name)
 }
 \value{
 aggregated flowframe as returned by the FlowSOM::AggregateFlowFrames function
++ the fcs file corresponding to it
 }
 \description{
-Title
+Aggregate fcs files into one tranform fcs file
 }
 \examples{
 bla

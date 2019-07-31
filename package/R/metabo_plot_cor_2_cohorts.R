@@ -39,7 +39,7 @@ metabo_cor_2_cohorts <- function (model_stat1, norm_data1,
        main = "Metabolite importance in the 2 cohorts")
   abline(a = 0, b=1, col = "red", lty = 2)
 
-  meta_metabo_filt <- meta_metabo[,names(g_r_cryo)]
+  meta_metabo_filt <- meta_metabo[,make.names(names(g_r_cryo))]
 
   for (i in 1:length(table((as.factor(meta_metabo_filt[2,]))))){
     if(perm_distribution==FALSE){

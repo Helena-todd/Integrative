@@ -5,6 +5,7 @@
 #' @import dplyr
 #' @import FlowSOM
 #' @import ggplot2
+#' @import assertthat
 #' @importFrom purrr %>%
 #' @importFrom openxlsx read.xlsx
 #'
