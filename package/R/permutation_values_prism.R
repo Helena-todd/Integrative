@@ -1,13 +1,13 @@
-perm_vals_PRISM <- function(norm_data, PRISM_name){
+perm_vals_PRISM <- function(norm_data, PRISM_name, rds_name){
   handle3 <- qsub_lapply(
     X = seq_along(colnames(norm_data)[-which(colnames(norm_data) %in% c("group", "age_recip", "gender_comp"))]),
     qsub_environment = c("norm_data", "perm_val_LR_demo"),
     qsub_packages = c("tidyverse", "BioGVHD", "magrittr", "purrr", "dplyr", "nnet", "pROC"),
     qsub_config = override_qsub_config(
-      memory = "15G",
+      memory = "3G",
       max_wall_time = "24:00:00",
-      name = "BioGVHD",
-
+      name = PRISM_name,
+      batch_tasks = 10,
       wait = FALSE,
       remove_tmp_folder = FALSE,
       stop_on_error = FALSE
@@ -26,7 +26,7 @@ perm_vals_PRISM <- function(norm_data, PRISM_name){
       PVD
     })
 
-  saveRDS(handle3, "handle_louis_donors_TNT.rds")
+  saveRDS(handle3, rds_name)
 }
 
 
