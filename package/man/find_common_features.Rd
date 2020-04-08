@@ -4,8 +4,14 @@
 \alias{find_common_features}
 \title{Find_common_features}
 \usage{
-find_common_features(selected_features, ndata, other_features_file,
-  other_norm_data_file, file_path, file_name)
+find_common_features(
+  selected_features,
+  ndata,
+  other_features_file,
+  other_norm_data_file,
+  file_path,
+  file_name
+)
 }
 \arguments{
 \item{selected_features}{The selected features in this cohort}

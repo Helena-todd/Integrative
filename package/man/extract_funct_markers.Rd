@@ -5,8 +5,15 @@
 \alias{extract_funct_markers}
 \title{extract_funct_markers}
 \usage{
-extract_funct_markers(recip_names, fsom, funct_marks, min_ref, max_ref,
-  files2rescale, samp_patients)
+extract_funct_markers(
+  recip_names,
+  fsom,
+  funct_marks,
+  min_ref,
+  max_ref,
+  files2rescale,
+  samp_patients
+)
 }
 \arguments{
 \item{recip_names}{vector containing the names of recipients' fcs files}

@@ -39,19 +39,19 @@ gather_RDR <- function(data_couples, beh_couples = NULL,
     inner_join(pctgs_sel_ft_couples_90, by = "COUPLENUMBER")
 
   # recip info:
-  load(data_recip)
+  pctgs_sel_ft_recip_90 <- readRDS(data_recip)
   if(!is.null(beh_recip)){
     # select only the features that had the same behaviour in the two cohorts
     sel_beh <- read.xlsx(beh_recip)
-    pctgs_sel_ft_recip_90 <- pctgs_sel_ft_recip_90[,c("group", "Id.Cryostem.R", sel_beh$sel_beh)]
+    pctgs_sel_ft_recip_90 <- pctgs_sel_ft_recip_90[,c("group", sel_beh$features)]
   }
-  colnames2keep <- which(colnames(pctgs_sel_ft_recip_90) %in% c("group", "Id.Cryostem.R"))
+  colnames2keep <- which(colnames(pctgs_sel_ft_recip_90) %in% c("group"))
   colnames(pctgs_sel_ft_recip_90)[-colnames2keep] <-
     gsub("X", "R_", colnames(pctgs_sel_ft_recip_90)[-colnames2keep])
   pctgs_recip <- couple_info %>%
     rownames_to_column("Id.Cryostem.R") %>%
     dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>%
-    right_join(pctgs_sel_ft_recip_90, by = "Id.Cryostem.R")
+    right_join(pctgs_sel_ft_recip_90 %>% rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R")
 
 
   # combine :

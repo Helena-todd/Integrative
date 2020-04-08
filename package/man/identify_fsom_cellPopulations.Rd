@@ -4,8 +4,13 @@
 \alias{identify_fsom_cellPopulations}
 \title{identify_fsom_cellPopulations}
 \usage{
-identify_fsom_cellPopulations(fsom, prettyMarkerNames, cellTypes, pdf_name,
-  view)
+identify_fsom_cellPopulations(
+  fsom,
+  prettyMarkerNames,
+  cellTypes,
+  pdf_name,
+  view
+)
 }
 \arguments{
 \item{fsom}{A FlowSOM object}

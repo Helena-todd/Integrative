@@ -4,8 +4,7 @@
 \alias{plot_funct_markers}
 \title{plot_funct_markers}
 \usage{
-plot_funct_markers(metaclust_values, patient_names, samp_patients,
-  png_name)
+plot_funct_markers(metaclust_values, patient_names, samp_patients, png_name)
 }
 \arguments{
 \item{metaclust_values}{list of matrices containing the cell expression of

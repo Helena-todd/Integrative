@@ -4,8 +4,12 @@
 \alias{find_common_behaviour_features}
 \title{find_common_behaviour_features}
 \usage{
-find_common_behaviour_features(list_common_features, file_path,
-  common_ft_file_name, common_beh_file_name)
+find_common_behaviour_features(
+  list_common_features,
+  file_path,
+  common_ft_file_name,
+  common_beh_file_name
+)
 }
 \arguments{
 \item{list_common_features}{The list containing the common features and the local and other cohort dataframes, as returned by the function find_common_features}

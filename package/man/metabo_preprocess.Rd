@@ -4,9 +4,18 @@
 \alias{metabo_preprocess}
 \title{metabo_preprocess}
 \usage{
-metabo_preprocess(patient_type, data_metabolites, meta_metabo,
-  other_cohort_metabolites, rd_meta, names_patients, pdf_name,
-  pdf_variance_name, save_results, save_res_repository)
+metabo_preprocess(
+  patient_type,
+  data_metabolites,
+  meta_metabo,
+  other_cohort_metabolites,
+  rd_meta,
+  names_patients,
+  pdf_name,
+  pdf_variance_name,
+  save_results,
+  save_res_repository
+)
 }
 \arguments{
 \item{patient_type}{A charcter string, either "donors", "recipients" or "donors and recipients"}

@@ -4,8 +4,7 @@
 \alias{compute_marker_MFIs_per_metacluster}
 \title{Title}
 \usage{
-compute_marker_MFIs_per_metacluster(ff_agg, pctgs_meta, fsom,
-  functional_marks)
+compute_marker_MFIs_per_metacluster(ff_agg, pctgs_meta, fsom, functional_marks)
 }
 \arguments{
 \item{ff_agg}{aggregated cells from each patient, as returned by AggregateFlowFrames FlowSOM function}

@@ -43,13 +43,13 @@ find_common_behaviour_features <- function(list_common_features,
   df1 <- data.frame(features = list_common_features$common_features,
                     dir = local_tags)
   write.xlsx(df1,
-             file = paste0(recip_path, common_ft_file_name))
+             file = paste0(file_path, common_ft_file_name))
 
   df2 <- data.frame(features = common_beh,
                     dir = local_tags[which(local_tags == other_tags)])
 
   write.xlsx(df2,
-             file = paste0(recip_path, common_beh_file_name))
+             file = paste0(file_path, common_beh_file_name))
 
   print(paste0(length(common_beh),
                " features out of the ", length(list_common_features$common_features),

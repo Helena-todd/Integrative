@@ -4,8 +4,14 @@
 \alias{save_genes_annot}
 \title{Save_genes_annot}
 \usage{
-save_genes_annot(norm_data, path_obj, selected_genes, compar_design,
-  graph = NULL, path_annot_obj)
+save_genes_annot(
+  norm_data,
+  path_obj,
+  selected_genes,
+  compar_design,
+  graph = NULL,
+  path_annot_obj
+)
 }
 \arguments{
 \item{norm_data}{The normalised data matrix}

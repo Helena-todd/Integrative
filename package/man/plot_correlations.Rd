@@ -12,7 +12,7 @@ plot_correlations(ft_df, compar)
 \item{compar}{The comparison: either "TNT" or "PS"}
 }
 \value{
-A plot
+A plot and the graph
 }
 \description{
 plot_correlations

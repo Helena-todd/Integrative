@@ -4,8 +4,14 @@
 \alias{metabo_cor_2_cohorts_LR}
 \title{metabo_ plot correlation between 2 cohorts}
 \usage{
-metabo_cor_2_cohorts_LR(model_stat1, norm_data1, model_stat2, norm_data2,
-  stat_of_interest, meta_metabo)
+metabo_cor_2_cohorts_LR(
+  model_stat1,
+  norm_data1,
+  model_stat2,
+  norm_data2,
+  stat_of_interest,
+  meta_metabo
+)
 }
 \arguments{
 \item{model_stat1}{The model stat of the cryostem cohort}

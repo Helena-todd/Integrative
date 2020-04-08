@@ -4,8 +4,14 @@
 \alias{select_features}
 \title{Select_features}
 \usage{
-select_features(perm_vals, norm_data, alone_or_demo = 1, threshold,
-  file_path, file_name)
+select_features(
+  perm_vals,
+  norm_data,
+  alone_or_demo = 1,
+  threshold,
+  file_path,
+  file_name
+)
 }
 \arguments{
 \item{perm_vals}{The permutation distributions results}

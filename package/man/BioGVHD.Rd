@@ -3,7 +3,6 @@
 \docType{package}
 \name{BioGVHD}
 \alias{BioGVHD}
-\alias{BioGVHD-package}
 \title{Title of package}
 \description{
 Description of package

@@ -4,9 +4,16 @@
 \alias{gather_DRDR}
 \title{Gather Donors, Recipients and D-R}
 \usage{
-gather_DRDR(data_couples, beh_couples = NULL, data_recip,
-  beh_recip = NULL, data_donors, beh_donors = NULL, couple_info,
-  couple_info_2keep)
+gather_DRDR(
+  data_couples,
+  beh_couples = NULL,
+  data_recip,
+  beh_recip = NULL,
+  data_donors,
+  beh_donors = NULL,
+  couple_info,
+  couple_info_2keep
+)
 }
 \arguments{
 \item{data_couples}{The path to the matrix with couples in rows and selected feaatures in columns}

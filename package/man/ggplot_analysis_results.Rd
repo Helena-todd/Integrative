@@ -4,8 +4,14 @@
 \alias{ggplot_analysis_results}
 \title{ggplot_analysis_results}
 \usage{
-ggplot_analysis_results(analysis, perplexity_nb = 8, data_matrix,
-  metadata, col_by, shape_by)
+ggplot_analysis_results(
+  analysis,
+  perplexity_nb = 8,
+  data_matrix,
+  metadata,
+  col_by,
+  shape_by
+)
 }
 \arguments{
 \item{analysis}{Type of analysis to be performed. For now, either "PCA" or "tSNE" can be run.}

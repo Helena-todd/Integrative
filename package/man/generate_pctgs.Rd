@@ -23,14 +23,6 @@ generate_pctgs(recip_names, fsom, pdf_name, fcs_dir, output_dir)
 \item{max_ref}{vector of maximum values to use for rescaling}
 
 \item{files2rescale}{vector of names of the files to rescale}
-
-\item{recip_names}{vector containing the names of recipients' fcs files}
-
-\item{fsom}{FlowSOM object}
-
-\item{pdf_name}{choose a name for the exported pdf which will contain one fsom map per patient}
-
-\item{fcs_dir}{path to the directory containing fcs files, corresponding to recip_names}
 }
 \value{
 a pctgs matrix and pdf containing one map per patient

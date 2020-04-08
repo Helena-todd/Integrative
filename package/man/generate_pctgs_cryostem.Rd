@@ -4,8 +4,16 @@
 \alias{generate_pctgs_cryostem}
 \title{generate_pctgs_cryostem}
 \usage{
-generate_pctgs_cryostem(recip_names, fsom, pdf_name, fcs_dir, output_dir,
-  min_ref = NULL, max_ref = NULL, files2rescale = NULL)
+generate_pctgs_cryostem(
+  recip_names,
+  fsom,
+  pdf_name,
+  fcs_dir,
+  output_dir,
+  min_ref = NULL,
+  max_ref = NULL,
+  files2rescale = NULL
+)
 }
 \arguments{
 \item{recip_names}{vector containing the names of recipients' fcs files}

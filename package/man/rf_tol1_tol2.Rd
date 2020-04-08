@@ -4,8 +4,7 @@
 \alias{rf_tol1_tol2}
 \title{Title}
 \usage{
-rf_tol1_tol2(df_orig, mtry = 3, ntree = 10000,
-  package_2use = "randomForest")
+rf_tol1_tol2(df_orig, mtry = 3, ntree = 10000, package_2use = "randomForest")
 }
 \arguments{
 \item{df_orig}{Original dataframe on which rf should be run. Should contain a "group" column, with "primary_tolerant", "secondary_tolerant" or "non_tolerant" factor levels}

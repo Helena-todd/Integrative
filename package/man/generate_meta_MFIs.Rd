@@ -4,8 +4,14 @@
 \alias{generate_meta_MFIs}
 \title{generate_meta_MFIs}
 \usage{
-generate_meta_MFIs(recip_names, fsom, cols_to_use, min_ref, max_ref,
-  files2rescale)
+generate_meta_MFIs(
+  recip_names,
+  fsom,
+  cols_to_use,
+  min_ref,
+  max_ref,
+  files2rescale
+)
 }
 \arguments{
 \item{recip_names}{vector containing the names of recipients' fcs files}
