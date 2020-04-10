@@ -4,7 +4,7 @@
 \alias{visualise_features_in_boxplots}
 \title{visualise_features_in_boxplots}
 \usage{
-visualise_features_in_boxplots(list_common_features)
+visualise_features_in_boxplots(list_common_features, compar = "TNT")
 }
 \arguments{
 \item{list_common_features}{The list containing the common features and the local and other cohort dataframes, as returned by the function find_common_features}
