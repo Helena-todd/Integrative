@@ -4,7 +4,7 @@
 \alias{plot_correlations}
 \title{plot_correlations}
 \usage{
-plot_correlations(ft_df, compar)
+plot_correlations(ft_df, ft_file_other_cohort, compar, pval_threshold)
 }
 \arguments{
 \item{ft_df}{The dataframe with samples in rows, features + group in columns}
