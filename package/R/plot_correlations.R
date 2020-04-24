@@ -30,8 +30,14 @@ plot_correlations <- function(ft_df,
 
   cor_sel <- cor_sel[which(pvals < pval_threshold),]
 
-  other <- readRDS(ft_file_other_cohort) %>%
-    dplyr::select(colnames(ft_df))
+  if(grepl(".RDS", ft_file_other_cohort)){
+    other <- readRDS(ft_file_other_cohort) %>%
+      dplyr::select(colnames(ft_df))
+  } else if(grepl(".RData", ft_file_other_cohort)){
+    tmp_name <- load(ft_file_other_cohort)
+    other <- eval(parse(text = tmp_name)) %>%
+      dplyr::select(colnames(ft_df))
+  }
   #
   # load(ft_file_other_cohort)
   # other <- rna_recip_cryo_TNT_90 %>%
