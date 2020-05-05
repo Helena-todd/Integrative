@@ -65,18 +65,27 @@ plot_correlations2 <- function(ft_df,
 
   # correlated_both <- intersect(correlated_features[,1:2], correlated_other[,1:2])
   correlated_both <- dplyr::intersect(cor_sel[,1:2], cor_sel_other[,1:2])
-  cor <- rep(0, nrow(correlated_both))
-  for(i in 1:nrow(correlated_both)){
-    cor1 <- cor_sel[which((cor_sel[,1] == correlated_both[i,1]) &
-                            (cor_sel[,2] == correlated_both[i,2])), 3]
-    cor2 <- cor_sel_other[which((cor_sel_other[,1] == correlated_both[i,1]) &
-                                  (cor_sel_other[,2] == correlated_both[i,2])), 3]
-    cor[i] <- mean(cor1, cor2)
-  }
-  correlated_both$value <- cor
+  if(nrow(correlated_both) != 0){
+    cor <- rep(0, nrow(correlated_both))
+    for(i in 1:nrow(correlated_both)){
+      cor1 <- cor_sel[which((cor_sel[,1] == correlated_both[i,1]) &
+                              (cor_sel[,2] == correlated_both[i,2])), 3]
+      cor2 <- cor_sel_other[which((cor_sel_other[,1] == correlated_both[i,1]) &
+                                    (cor_sel_other[,2] == correlated_both[i,2])), 3]
+      cor[i] <- mean(cor1, cor2)
+    }
+    correlated_both$value <- cor
 
-  gr <- graph_from_data_frame(correlated_both, directed = FALSE,
-                              vertices=colnames(ft_df))
+    gr <- graph_from_data_frame(correlated_both, directed = FALSE,
+                                vertices=colnames(ft_df))
+  } else {
+    gr <- graph_from_data_frame(cor_sel_other, directed = FALSE,
+                                vertices=colnames(ft_df))
+    gr <- gr %>%
+      delete_edges(seq(1, length(E(gr))))
+    print("There are no correlations between the selected variables that are common between the two cohorts")
+  }
+
   nodes <- get.vertex.attribute(gr)
   color_nodes <- node_color
 
