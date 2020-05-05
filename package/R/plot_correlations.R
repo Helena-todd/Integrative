@@ -119,6 +119,12 @@ plot_correlations <- function(ft_df,
   set.seed(1)
   plot(gr, vertex.size = 5, vertex.label.cex = .6, edge.width = (E(gr)$value - round(min(E(gr)$value), digits = 2)) * 10,
        vertex.color = color_nodes, layout = layout_nicely)
+  legend(1, 1, legend=c(round(min(E(gr)$value), digits = 3), round(max(E(gr)$value), digits = 3)),
+         col=c("grey", "grey"),
+         lwd=c((min(E(gr)$value) - round(min(E(gr)$value), digits = 2)) * 10,
+               (max(E(gr)$value) - round(min(E(gr)$value), digits = 2)) * 10),
+         cex=0.8,
+         title="Edge weight", text.font=4, bg='white')
   return(gr)
 }
 
