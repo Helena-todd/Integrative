@@ -1,0 +1,196 @@
+---
+title: "Comparison of donors and recipients in the Cryostem cohort"
+author: "Helena"
+date: "23/04/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+I can re-use the table that contained, for every patient, the percentage 
+of cells in the 40 metaclusters, as well as the percentage of cells that were 
+positive for the different functional markers:
+```{r}
+mat_all <- readRDS("../data/cyto_national/compar_donors_recipients/mat_pheno_funct_all_patients.RDS")
+```
+
+I also extract clinical information on these patients (the recipients age,
+gender compatibility, the CMV status of donors and recipients, ...)
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+head(couple_info[,c(5, 11,15, 56:59)])
+```
+
+
+## Comparison of primary tolerant donors vs recipients
+
+## Feature selection:
+
+Run the permutation distribution, taking demographic variables into account:
+I first add the age and gender compatibility information to the data.
+```{r, echo = FALSE}
+norm_data <- mat_all %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  left_join(couple_info %>% 
+              rownames_to_column("Id.Cryostem.R") %>% 
+              dplyr::select(gender_comp, age_recip, Id.Cryostem.R),
+            by = "Id.Cryostem.R") %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+rd_path <- "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/compar_donors_recipients/"
+```
+
+I then compute the permutation distribution for primary tolerant donors vs recipients.
+Each variable (one of the fourty populations found + percentage of cells that 
+express a certain functional marker in these fourty populations) is tested, 
+to see if it can be used to separate primary tolerant donors from recipients. We 
+also try including the recipients age and the gender compatibility in the model,
+to see if some variables are still informative even after "correcting" for these
+"confounding factors".
+```{r, eval=FALSE, echo=FALSE}
+norm_data <- norm_data %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  column_to_rownames("rn")
+norm_data$group <- as.factor(ifelse(grepl("D", rownames(norm_data)), "D", "R"))
+colnames(norm_data) <- make.names(colnames(norm_data))
+
+# Calculate the number of cores
+no_cores <- detectCores() - 1
+
+# Initiate cluster
+cl<-makeCluster(no_cores)
+ 
+clusterExport(cl, c("norm_data", "perm_val_LR_demo"))
+
+Sys.time()
+perm_vals <- parLapply(cl, seq_along(colnames(norm_data))[-which(colnames(norm_data) %in% c("group", "age_recip", "gender_comp"))], function(feat){
+  perm_val_LR_demo(data = norm_data, nb_perm = 1000, ind_feature = feat)
+})
+
+stopCluster(cl)
+Sys.time()
+
+save(perm_vals, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/compar_donors_recipients/perm_vals_PT.RData")
+save(norm_data, file= "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/compar_donors_recipients/norm_data_PT.RData")
+```
+
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r}
+# The permutation values were also computed for the feature "group", per error
+# -> I remove the last perm value (number 561)
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/perm_vals_TNT.RData")
+perm_vals <- perm_vals[-length(perm_vals)]
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/norm_data_TNT.RData")
+gr_medians <- norm_data %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+
+
+#### Threshold of 0.90:
+
+Selected features for the couples (with a threshold of 0.90), after 
+computing permutation distributions for every feature:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+# barplot(qt)
+plot(density(qt))
+# Since the first column in norm_data is "COUPLENUMBER", I need to add +1 here:
+selected_ft_rd_qt <- colnames(norm_data)[(which(qt>.90)+1)]
+selected_ft_rd_qt <- selected_ft_rd_qt[!is.na(selected_ft_rd_qt)]
+# selected_ft_rd_qt
+write.xlsx(selected_ft_rd_qt, 
+           file = "../data/cyto/rd/perm_val_TNT_90_thresh.xlsx")
+print(paste0(length(selected_ft_rd_qt),
+             " features were selected with a 0.90 threshold in the St Louis cohort."))
+```
+
+Which of these features were also found in the Cryostem cohort?
+```{r, echo = FALSE}
+sel_louis <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/perm_val_TNT_90_thresh.xlsx", colNames = FALSE)
+sel_cryo <- read.xlsx("../data/cyto_national/test_stlouis_backbone/rd/perm_val_TNT_90_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_ft_rd_qt %in% sel_cryo$X1)
+length(sel_common)
+selected_ft_rd_qt[sel_common]
+```
+
+Save the selected features for the St Louis couples:
+```{r}
+pctgs_sel_ft_couples_90 <- norm_data[,c("group", "COUPLENUMBER", selected_ft_rd_qt[sel_common])]
+save(pctgs_sel_ft_couples_90, 
+     file = "../data/cyto/rd/pctgs_sel_ft_couples_TNT_90.RData")
+```
+
+
+Graph of the selected metabolites that are common between the two cohorts:
+```{r, echo = FALSE}
+data_2use <- norm_data[,c("group", selected_ft_rd_qt[sel_common])]
+
+# plot_correlations(data_2use, compar = "TNT")
+```
+
+We can also see how many of these features had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients)
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_ft_rd_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/cyto/rd/perm_val_dir_TNT_90_thresh.xlsx")
+```
+
+Graph of the selected metabolites that had the same behaviour in the two cohorts:
+```{r, echo = FALSE}
+selb <- read.xlsx("../data/cyto/rd/perm_val_beh_TNT_90_thresh.xlsx")
+selb <- selb$sel_beh
+data_2use <- norm_data[,c("group", selb)]
+
+plot_correlations(ft_df = data_2use,
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/rd/pctgs_sel_ft_couples_TNT_90.RData",
+                  compar = "TNT",
+                  pval_threshold = 0.01)
+
+```

@@ -33,7 +33,6 @@ gather_RDR <- function(data_couples, beh_couples = NULL,
     gsub("X", "couple_", colnames(pctgs_sel_ft_couples_90)[-colnames2keep])
   # combine feature info with couple info about gender_comp...
   pctgs_couples <- couple_info %>%
-    rownames_to_column("Id.Cryostem.R") %>%
     dplyr::select(couple_info_2keep) %>%
     dplyr::filter(grepl("R", rownames(couple_info))) %>%
     inner_join(pctgs_sel_ft_couples_90, by = "COUPLENUMBER")
@@ -49,7 +48,6 @@ gather_RDR <- function(data_couples, beh_couples = NULL,
   colnames(pctgs_sel_ft_recip_90)[-colnames2keep] <-
     gsub("X", "R_", colnames(pctgs_sel_ft_recip_90)[-colnames2keep])
   pctgs_recip <- couple_info %>%
-    rownames_to_column("Id.Cryostem.R") %>%
     dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>%
     right_join(pctgs_sel_ft_recip_90 %>% rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R")
 
