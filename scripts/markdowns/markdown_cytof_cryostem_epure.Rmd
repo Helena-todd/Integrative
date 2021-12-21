@@ -1,0 +1,2290 @@
+---
+title: "Untitled"
+author: "helena"
+date: "10/07/2020"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r imports, echo=FALSE, results='hide',  warning = FALSE}
+suppressPackageStartupMessages({
+  library("openxlsx")
+  library("FlowSOM")
+  library("tidyverse")
+  library("magrittr")
+  library("flowCore")
+  library("flowWorkspace")
+  library("ggraph")
+  library("igraph")
+  library("scales")
+  library("dendextend")
+  library("cowplot")
+  library("pheatmap")
+  library(dplyr)
+  library(BioGVHD)
+  library(data.table)
+  library(dendextend)
+  library(ggplot2)
+  library(nnet)
+  library(pROC)
+  library(VennDiagram)
+  library(parallel)
+  library(kableExtra)
+  library(gridExtra)
+})
+library(BioGVHD)
+options("scipen"=100)
+```
+
+# Analysis on the donors and recipients
+
+## Load the data
+
+I load in the FCS files of the Cryostem patients, and the matrix that contain
+clinical informations about these patients.
+```{r, echo = FALSE, include = FALSE}
+fcs_dir <- "~/Documents/VIB/Projects/Integrative_Paris/National_cohort/CYTOF/CYTOF_David_Michonneau_fcs/"
+fcs_names <- list.files(fcs_dir, pattern="^2.*fcs$")
+names(fcs_names) <- gsub("^[0-9]*_([^_]*)_.*", "\\1", fcs_names)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd$GROUP <- as.factor(tolower(samp_rd$GROUP))
+
+## once the dates are readable by R, they are not readable anymore by excel 
+## -> I import what I need from the old table
+
+samp_rd_old <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL.xlsx")
+samp_rd$DELAY_SAMPLE <- samp_rd_old$DELAY_SAMPLE
+
+colnames(samp_rd)[3] <- "Id.Cryostem.R"
+selec_couples <- samp_rd %>%
+  dplyr::filter(DELAY_SAMPLE >= 148) %>%
+  dplyr::filter(!COUPLENUMBER %in% c(32, 71, 50)) %>%
+  dplyr::select(COUPLENUMBER)
+
+samp_rd <- samp_rd[which(samp_rd$COUPLENUMBER %in% selec_couples$COUPLENUMBER),]
+rownames(samp_rd) <- samp_rd$Id.Cryostem.R
+rd_names <- fcs_names[samp_rd$Id.Cryostem.R]
+```
+
+I also extract informations at the couple level, by comparing donors and recipients 
+from the same couple, to extract two new features: 
+- gender compatibility (donor gender -> recipient gender)
+- age of the recipient when he/ she recieved the graft
+
+```{r, echo = FALSE, include = FALSE}
+complete_couples <- names(table(samp_rd$COUPLENUMBER))[which(table(samp_rd$COUPLENUMBER)==2)]
+couple_info <- samp_rd %>% 
+  arrange(COUPLENUMBER) %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  dplyr::select(c("COUPLENUMBER", "Gender", "DOG", "DOB", "GROUP"))
+  
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       gender_donors <- couple_info$Gender[c(FALSE,TRUE)],
+       gender_donors <- couple_info$Gender[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       gender_recip <- couple_info$Gender[c(TRUE,FALSE)],
+       gender_recip <- couple_info$Gender[c(FALSE,TRUE)])
+
+gender_comp <- paste0(gender_donors, gender_recip)
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       age_recip <- couple_info$DOG[c(TRUE, FALSE)] - couple_info$DOB[c(TRUE, FALSE)],
+       age_recip <- couple_info$DOG[c(FALSE, TRUE)] - couple_info$DOB[c(FALSE, TRUE)])
+
+couple_info <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+save(couple_info, file = "../data/cyto_national/test_stlouis_backbone/couple_info.RData")
+```
+
+Here’s a sample of the resulting table:
+```{r, echo = FALSE}
+head(couple_info)
+```
+
+## Map the cryostem patients directly on the FlowSOM backbone
+
+We re-use the FlowSOM backbone that was generated on the St Louis data, and
+we now map the Cryostem patients to that backbone. The backbone consists of
+40 metaclusters:
+```{r, echo = FALSE}
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_meta_rd_automatic_clustering.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_rd_automatic_clustering.RData")
+PlotLabels(fsom_meta_rd$FlowSOM, labels = colnames(pctgs_meta_rd), fontSize = .8)
+
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/ff_agg_rd_nat_140RData.RData")
+prettyMarkerNames <- ff_agg_rd@parameters@data[,"desc"] #change names of markers in flowSOM
+prettyMarkerNames <- gsub(".*_", "", prettyMarkerNames)
+prettyMarkerNames[is.na(prettyMarkerNames)] <-
+  ff_agg_rd@parameters@data[,"name"][is.na(prettyMarkerNames)]
+names(prettyMarkerNames) <- colnames(ff_agg_rd)
+PlotStars(fsom_meta_rd$FlowSOM,
+          markers = names(prettyMarkerNames)[which(prettyMarkerNames%in% c("CD11a","CD16","CD127","CD3","CD4","CD45RA","CD8a","HLADR","CD19",
+                                                                            "CD38","CD161","CCR7","CD27","CCR4","CCR5","CD5","CXCR3","Fas",
+                                                                            "foxP3","CD24","CXCR5"))])
+```
+
+These metaclusters were manually annotated by Laetitia Dubouchet:
+```{r, echo = FALSE}
+labels_table <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Received_documents/09:2019/FlowJO_40metaclusters_reevaluation_08.2019.xlsx")
+labels <- paste0(1:40, "_", labels_table$Population_ID_revision_onFJ)
+# labels <- paste0(1:40, "_", c("Conventional DCs, Mono", "CD8 TEM/TEMRA", "CD8 Tc2", 
+#                          "CD8 TSCM", "NK cells", "CD8 Treg", "CD8 TSCM", 
+#                          "DP Treg", "moDCs", "DP Treg", "CD8_TEMRA", "CD8 Tc17", 
+#                          "CD4 TCM + Th2 + Treg", "CD4 Th1/Th17", "DP Treg",
+#                          "CD4 Naives", "CD8 TSCM", "NK cells", "DN Treg", 
+#                          "Conventional DCs + NK", "B naives", "B memory", 
+#                          "CD8 TSCM", "CD4 TCM", "B naives", "CD4 naives",
+#                          "CD4 Treg (CD25low)", "B naives", "unknown",
+#                          "CD4 Treg + Th2", "CD4 Treg (CD25high)", 
+#                          "CD4 Treg (CD25low)", "B naives", "CD4 TCM Th17/Th2",
+#                          "Conventional DCs", "CD4 TSCM", "CD4 TSCM", 
+#                          "B transitional", "B reg", "B naives"))
+PlotLabels(fsom_meta_rd$FlowSOM, labels = labels, fontSize = .8)
+```
+
+We can then generate patients profiles, ie, for every patient, the percentage of 
+his/her cells that mapped to the different FlowSOM metaclusters. These percentages
+will be used as features for the rest of the analysis.
+```{r, echo = FALSE}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_rd.RData")
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/pctgs_rd.RData")
+pctgs_rd <- pctgs_rd[samp_rd$Id.Cryostem.R,]
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/mapping_info.RData")
+```
+
+## Pre-processing
+
+A significant amount of patients had only CD19 positive cells, which caused these
+patients to have significant amounts of cells that didn't match the St Louis 
+FlowSOM backbone. We therefore decided to remove CD19 from the analysis and not
+to use it to map the Cryostem patients to the St Louis FlowSOM backbone.
+
+```{r, echo = FALSE}
+# compute the pctgs per metacluster:
+pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclustering, sum)}))
+colnames(pctgs_meta_rd) <- labels
+```
+
+## Data analysis
+
+### Phenotypic markers: using only the metaclusters
+
+We then visualise the donors and recipients on a same PCA, which was built on 
+the patient's cell profiles as identified in the FlowSOM map above. 
+We measure the distances between donors and recipients from the same couple 
+on the PCA, that we represented here as lines linking donors to recipients.
+The color of these lines corresponds to the recipients' tolerance group
+
+
+* red: non tolerant
+* blue: secondary tolerant
+* green: primary tolerant
+
+
+```{r, echo = FALSE}
+pca <- prcomp(pctgs_meta_rd)
+plot(pca$x)
+
+distances = c()
+for (i in names(table(samp_rd$COUPLENUMBER))){
+  group_status <- samp_rd$GROUP[which(samp_rd$COUPLENUMBER==i)]
+  pt_coord <- pca$x[rownames(samp_rd)[which(samp_rd$COUPLENUMBER==i)],c(1:2)]
+  if(group_status[1]=="non_tolerant"){
+    lines(pt_coord,col="red")
+    points(pt_coord[1,1], pt_coord[1,2], pch = 19)
+  } else if(group_status[1]=="primary_tolerant"){
+    lines(pt_coord,col="green")
+    points(pt_coord[1,1], pt_coord[1,2], pch = 19)
+  } else {
+    lines(pt_coord,col="blue")
+    points(pt_coord[1,1], pt_coord[1,2], pch = 19)
+  }
+  distances = c(distances, sqrt((pt_coord[2,1]-pt_coord[1,1])^2 + (pt_coord[2,2]-pt_coord[1,2])^2))
+}
+
+```
+
+### Functional markers: assessing the distribution of positive cells for the functional markers in the metaclusters
+
+After defining the patients phenotypic profiles in 40 metaclusters, we also 
+investigate the expression of the functional markers in these patients' cells.
+We identify the percentage of cells expressing specific functional markers in 
+FlowSOM's metaclusters, based on the FlowJo workspaces of Laetitia 
+(she has defined positivity thresholds in the patients for all of these markers)
+
+```{r, echo = FALSE}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/ratios_funct_meta_rd_automatic_clustering.RData")
+patient_names <- gsub("^[0-9]*_([^_]*)_.*", "\\1", names(result))
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/funct_mark_res_automatic_clustering.RData")
+funct_big_table <- do.call(cbind, tables_res)
+rownames(funct_big_table) <- patient_names
+```
+
+
+```{r, eval = FALSE, echo = FALSE}
+wsp_file <- "~/Documents/VIB/Projects/Integrative_Paris/National_cohort/CYTOF/CYTOF_David_Michonneau_fcs/Threshold_Cryostem_30-May-2019.wsp"
+wsp <- openWorkspace(wsp_file)
+gates <- parseWorkspace(wsp, "All Samples", sampNloc = "sampleNode")
+
+plot(gates)
+leaf_nodes <- getNodes(gates)[-1]
+
+gates_matrix <- lapply(gates, function(x){
+  getIndiceMat(x, paste(leaf_nodes, collapse = "|"))
+})
+
+save(gates_matrix, file = "../data/cyto_national/parsed_wsp.RData")
+
+names(gates_matrix) <- gsub("_[0-9]*$", "", names(gates_matrix))
+
+# gates_manual <- lapply(gates_matrix, function(x){
+#   FlowSOMworkshop::manual_vector(x, leaf_nodes)
+# })
+# names(gates_manual) <- gsub("_[0-9]*$", "", names(gates_manual))
+#names(gates_manual)[1] <- "20170530_D2031_01_livecellswithoutbeads__livecells__ADN__time__Ungated____.fcs"
+
+###################################################################################
+## generate one table per patient, with metaclusters on rows and markers in columns
+###################################################################################
+result <- list()
+for(file in names(gates_matrix)){
+  print(file)
+  ff <- read.FCS(file.path(fcs_dir, file))
+  ff <- flowCore::transform(ff,
+                            flowCore::transformList(colnames(ff)[c(3,17,28:62,71)], arcsinhTransform(b=1/5, a=0, c=0)))
+  ## mapping directly to the fsom_meta leads to 27% of the cells being too far from their cluster -> I first map to the fsom and then extract the metaclusters info 
+  fsom_tmp <- NewData(fsom_rd$FlowSOM, ff)
+  
+  pctg_pos <- matrix(NA, 
+                     nrow = length(levels(fsom_rd$metaclustering)),
+                     ncol = ncol(gates_matrix[[file]]),
+                     dimnames = list(as.character(seq_len(length(levels(fsom_rd$metaclustering)))),
+                                     colnames(gates_matrix[[file]])))
+  pctg_pos_tmp <- apply(gates_matrix[[file]], 2, function(x){
+    tapply(x, GetMetaclusters(fsom_tmp, fsom_rd$metaclustering), function(y){
+      sum(y)/length(y)
+    })
+  })
+  pctg_pos[rownames(pctg_pos_tmp), ] <- pctg_pos_tmp
+  
+  set.seed(1)
+  pctg_pos_imputed <- apply(pctg_pos, 2, 
+                            function(x){
+                              missing <- which(is.na(x))
+                              x[missing] <- mean(x, na.rm = TRUE) + rnorm(length(missing), 
+                                                                          mean = 0, 
+                                                                          sd = 0.01)
+                              x
+                            })
+  
+  
+  file_red <- gsub("^[0-9]*_([^_]*)_.*", "\\1", file)
+  pdf(file = paste0("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/plots/cyto_national/test_stlouis_backbone/funct_marks/patient_", file_red,".pdf"))
+  PlotStars_pctgPos(fsom_meta_rd$FlowSOM, pctg_pos, 
+                    main = paste0(file_red,"_", samp_rd[file_red, "GROUP"], "_", samp_rd[file_red, "DATEOFCYTOFEXPERIMENT"]))
+  dev.off()
+  result[[file]] <- lst(pctg_pos = pctg_pos,
+                        pctg_pos_imputed = pctg_pos_imputed)
+}
+
+save(result, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/funct_markers/ratios_funct_meta_rd.RData")
+
+```
+
+
+```{r, eval = FALSE, echo = FALSE}
+# At this stage, I have one matrix per patient that contains the % of positive cells for each marker in each metacluster, I need to reshape into one matrix per marker, with patients in rows and % pos per metacluster in columns.
+
+
+###################################################################################
+## generate one big matrix, with patients on rows and markers in metaclusters in columns
+###################################################################################
+
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/funct_markers/ratios_funct_meta_rd.RData")
+
+# 
+# map_df(
+#   names(result),
+#   function(patient_name) {
+#     result[[patient_name]]$cluster_assignment %>% 
+#       reshape2::melt(varnames = c("cluster", ""))
+#   }
+# )
+
+tables_per_marker <- lapply(2:14, function(marker){
+  NULL
+  # names(marker) <- colnames(result[[1]]$cluster_assignment)[marker]
+})
+
+nClus = 40
+res_tables <- map(result, 2)
+
+for (pat in seq_along(res_tables)){
+  for (marker in 1:13){
+    data <- as.data.frame(res_tables[[pat]][,marker])
+    if (nrow(data) < nClus) {
+      patient_vector <- data.frame(
+        x = rep(0, nClus),
+        row.names = 1:nClus
+      )
+      patient_vector[rownames(data), ] <- data
+    } else {
+      patient_vector <- data
+    }
+    colnames(patient_vector) <- gsub("^[0-9]*_([^_]*)_.*", "\\1", names(result)[[pat]])
+    
+    tables_per_marker[[marker]] <- 
+      if (is.null(tables_per_marker[[marker]])) {
+        patient_vector
+      } else {
+        cbind(tables_per_marker[[marker]], patient_vector)
+      }
+  }
+}
+
+names(tables_per_marker) <- colnames(result[[1]]$pctg_pos_imputed)
+# tables_per_marker <- lapply(seq_along(tables_per_marker), function(i){
+#   mat <- tables_per_marker[[i]]
+#   marker_name <- names(tables_per_marker)[[i]]
+#   apply(mat, 2, function(x) scale)
+#   mat
+# })
+
+pdf(file = "~/Desktop/pheatmaps_funct_mrkers.pdf", width = 25, height=15)
+for (mark_nb in seq_along(tables_per_marker)){
+  mat2plot <- tables_per_marker[[mark_nb]][,which(colnames(tables_per_marker[[mark_nb]]) %in% rownames(samp_rd))]
+  samp_rd_annot <- samp_rd[colnames(mat2plot),]
+  samp_rd_annot$GROUP <- tolower(samp_rd_annot$GROUP)
+  annot_col <- samp_rd_annot[,c("GROUP", "DATEOFCYTOFEXPERIMENT")] %>% 
+    mutate("GROUP" = as.factor(GROUP),
+           "DATEOFCYTOFEXPERIMENT" = as.factor(DATEOFCYTOFEXPERIMENT))
+  rownames(annot_col) <- samp_rd_annot$Id.Cryostem.R
+  annot_col <- annot_col %>% rownames_to_column("rown") %>% 
+    arrange(GROUP) %>% 
+    column_to_rownames("rown")
+  mat2plot <- mat2plot[,rownames(annot_col)]
+  p <- pheatmap(mat2plot, annotation_col = annot_col, cluster_cols = F,
+           main = names(tables_per_marker)[mark_nb])
+  print(p)
+}
+dev.off()
+
+save(tables_per_marker, file = "../data/cyto_national/test_stlouis_backbone/funct_mark_res_13_06.RData")
+```
+
+```{r, echo = FALSE}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/funct_mark_res_13_06.RData")
+funct_marker_tables <- lapply(tables_res, function(mat){
+  mat <- as.data.frame(t(mat) )
+})
+
+funct_big_table <- do.call(cbind, funct_marker_tables)
+head(funct_big_table[,1:5])
+
+tochange <- colnames(funct_big_table)
+replacement <- labels
+
+toc1 <- gsub("[.][0-9]*", ".", tochange)
+toc2 <- paste0(toc1, replacement)
+new_colnames <- toc2
+colnames(funct_big_table) <- new_colnames
+     
+```
+
+### Phenotypic and functional markers
+
+Finally, we can merge the information about the percentages in the FlowSOM metaclusters 
+and the percentage of positive cells for the functional markers in these metaclusters
+into one big matrix. We will now use this matrix as the patients' profiles.
+
+```{r, echo = FALSE}
+mat_pheno_funct <- merge(as.data.frame(pctgs_meta_rd), as.data.frame(funct_big_table), by = "row.names") %>%
+  column_to_rownames("Row.names")
+samp_rd <- samp_rd[rownames(mat_pheno_funct),]
+# 
+if(all(rownames(samp_rd) == rownames(mat_pheno_funct))){
+  mat_2export <- mat_pheno_funct %>%
+    mutate(group = samp_rd$GROUP) %>%
+    magrittr::set_rownames(rownames(mat_pheno_funct))
+  saveRDS(mat_2export, "../data/cyto_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+}
+```
+
+We first decide to investigate differences between patients at the **couple** level.
+For each couple, we compute the donor - recipient difference, which will tell us 
+how the expression of each CyTOF feature has changed between the donor and recipient
+of a same couple. 
+
+```{r, echo = FALSE}
+df_tmp_f <- merge(data.frame(mat_pheno_funct), samp_rd, by="row.names") %>%
+  dplyr::select(c(make.names(colnames(mat_pheno_funct)), "Id.Cryostem.R", "GROUP", "COUPLENUMBER")) %>%
+  arrange(COUPLENUMBER)
+
+df_f_couple <- df_tmp_f %>%
+  group_by(COUPLENUMBER) %>%
+  summarise_if(is.numeric, ~.[1]-.[2]) %>%
+  mutate(group = unique(df_tmp_f[,c("GROUP", "COUPLENUMBER")])$GROUP) %>%
+  column_to_rownames("COUPLENUMBER")
+
+saveRDS(df_f_couple, "../data/cyto_national/compar_donors_recipients/mat_pheno_funct_all_patients.RDS")
+```
+
+In the following section, we identify the metalusters or functional markers that 
+are linked to tolerance in couples.
+To do so, we take a two steps approach, in which we first seek differences between
+(primary + secondary) tolerant and non-tolerant couples, and then between
+primary and secondary tolerant couples.
+
+#### Feature selection in non versus tolerant couples:
+
+The following method is applied to identify features that are informative regarding tolerance:
+For each feature, a multinomial regression model with patients' tolerance as outcome and feature as predictor is built using the stats R package on CRAN and the average AUC for all three pairwise outcome comparisons is extracted using the pROC R package on CRAN. Next the feature is permuted 1000 times and the corresponding models are updated, resulting in a permutation distribution of AUCs. If the quantile associated with the AUC of the original feature exceeds 0.9, the feature is selected. To ensure that the selected feature not only captures information related to age or gender, the above procedure is repeated with a model that, besides the feature, contains the recipients’ age and the gender compatibility between donors and recipients as additional predictors.
+
+```{r, echo = FALSE}
+rd_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(duplicated(COUPLENUMBER)) %>% 
+  mutate(COUPLENUMBER = as.numeric(COUPLENUMBER))
+
+norm_data <- df_f_couple %>% 
+  rownames_to_column("COUPLENUMBER") %>% 
+  mutate(COUPLENUMBER = as.numeric(COUPLENUMBER)) %>% 
+  left_join(rd_info %>% dplyr::select(COUPLENUMBER, gender_comp, age_recip, Id.Cryostem.R),
+            by = "COUPLENUMBER") %>% 
+  column_to_rownames("Id.Cryostem.R")
+```
+
+```{r, eval=FALSE, echo=FALSE}
+# compute the permutation distribution for non vs tolerant couples.
+norm_data$group <- as.character(norm_data$group)
+norm_data$group[which(norm_data$group!="non_tolerant")] <- "tolerant"
+norm_data$group <- as.factor(norm_data$group)
+
+# Calculate the number of cores
+no_cores <- detectCores() - 1
+
+# Initiate cluster
+cl<-makeCluster(no_cores)
+ 
+clusterExport(cl, c("norm_data", "perm_val_LR_demo"))
+
+Sys.time()
+perm_vals <- parLapply(cl, seq_along(colnames(norm_data))[-which(colnames(norm_data) %in% c("group", "age_recip", "gender_comp"))], function(feat){
+  perm_val_LR_demo(data = norm_data, nb_perm = 1000, ind_feature = feat+1)
+})
+
+stopCluster(cl)
+Sys.time()
+
+save(perm_vals, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/rd/perm_vals_TNT.RData")
+save(norm_data, file= "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/rd/norm_data_TNT.RData")
+```
+
+
+```{r, echo = FALSE}
+# Compute the median per group for every gene, to use it later in the graphs:
+
+# the permutation values were also computed for the feature "group", per error,
+# -> I remove the last perm_vals
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/rd/perm_vals_TNT.RData")
+perm_vals <- perm_vals[-length(perm_vals)]
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/rd/norm_data_TNT.RData")
+
+gr_medians <- norm_data %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+
+```{r, eval = FALSE, echo = FALSE}
+# The column names didn't match the ones of the St Louis cohort.
+# Here's a small fix.
+
+colnames_to_change <- colnames(norm_data[grep("^X.", colnames(norm_data))])
+
+# bla <- colnames(norm_data[49:54])
+# bli <- colnames(norm_data[9:14])
+# 
+# blu <- gsub("[.][.]", "._", bla)
+# blo <- gsub("^X[0-9]*", "", bli)
+# paste0(blu, blo)
+
+
+tochange <- colnames_to_change[41:560]
+replacement <- colnames_to_change[1:40]
+
+toc1 <- gsub("[.][.]", "._", tochange)
+rep1 <- gsub("^X[0-9]*", "", replacement)
+toc2 <- paste0(toc1, rep1)
+new_colnames <- c(replacement, toc2)
+colnames(norm_data)[grep("^X.", colnames(norm_data))] <- new_colnames
+save(norm_data, file= "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/rd/norm_data_TNT.RData")
+```
+
+This is the distribution of the features quantiles:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+# barplot(qt)
+plot(density(qt))
+# The first comlumn in norm_data is "COUPLENUMBER", so I need to add+1 here:
+selected_ft_rd_qt <- colnames(norm_data)[(which(qt>.90)+1)]
+selected_ft_rd_qt <- selected_ft_rd_qt[!is.na(selected_ft_rd_qt)]
+# selected_ft_rd_qt
+write.xlsx(selected_ft_rd_qt, 
+           file = "../data/cyto_national/test_stlouis_backbone/rd/perm_val_TNT_90_thresh.xlsx")
+print(paste0(length(selected_ft_rd_qt),
+             " features were selected with a 0.90 threshold in the Cryostem cohort."))
+```
+
+We can then see which of these features are commonly identified in the Cryostem and
+in the St louis cohort:
+```{r, echo = FALSE}
+sel_louis <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/perm_val_TNT_90_thresh.xlsx", colNames = FALSE)
+sel_cryo <- read.xlsx("../data/cyto_national/test_stlouis_backbone/rd/perm_val_TNT_90_thresh.xlsx", colNames = FALSE)
+sel_common <- which(sel_cryo$X1 %in% sel_louis$X1)
+length(sel_common)
+comm <- sel_cryo$X1[sel_common]
+comm
+
+# save these features
+pctgs_sel_ft_couples_90 <- norm_data[,c("group", "COUPLENUMBER", comm)]
+save(pctgs_sel_ft_couples_90,
+     file = "../data/cyto_national/test_stlouis_backbone/rd/pctgs_sel_ft_couples_TNT_90.RData")
+```
+
+Finally, we can identify the features that had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients)
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_ft_rd_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/cyto_national/test_stlouis_backbone/rd/perm_val_dir_TNT_90_thresh.xlsx")
+dir_genes_cryo <- dir_genes
+
+dir_genes_louis <- read.xlsx("../data/cyto/rd/perm_val_dir_TNT_90_thresh.xlsx", rowNames = FALSE)
+dir_genes_cryo <- as.data.frame(dir_genes_cryo) %>% 
+  column_to_rownames("V1")
+dir_genes_cryo <- dir_genes_cryo[dir_genes_louis$V1,]
+sel_beh <- dir_genes_louis$V1[which(dir_genes_louis$V2 == dir_genes_cryo)]
+sel_beh <- as.data.frame(sel_beh)
+write.xlsx(sel_beh, file = "../data/cyto/rd/perm_val_beh_TNT_90_thresh.xlsx")
+
+print(paste0(length(which(dir_genes_louis$V2 == dir_genes_cryo)),
+             " genes out of the ", length(sel_common),
+             " common selected genes have the same behaviour in both cohorts."))
+
+```
+
+We can Visualise how these features change at the couple level:
+I extract information of the expression of these common features in the recipients,
+and in the couples (donor value - recipient value), in the two cohorts.
+In the following figures, the percentage of cells that belong to a certain feature
+are represented. 
+The recipients values are represented on the x-axis, such that 
+recipients who had many cells corresponding to the feature are situated more to 
+the right.
+The donor-recipient values are represented on the y-axis, such that couples
+in which the feature was more expressed in the donors than in the recipients
+are situated more to the top.
+
+For each feature, the cryostem patients are on the left and the St Louis patients
+are on the right, for comparison between the two cohorts.
+```{r, echo = FALSE}
+# Extract the information for the D-R in the cryostem cohort, for the selected 
+# features that are common between the two cohorts:
+norm_data_cryo <- norm_data
+couple_info_cryo <- couple_info
+rd_info_cryo <- rd_info
+
+mat_cryo_dr <- norm_data %>% 
+  dplyr::select(c(comm,"COUPLENUMBER")) %>% 
+  left_join(rd_info, by = "COUPLENUMBER")
+
+# Extract the information for the R in the cryostem cohort, for the selected 
+# features that are common between the two cohorts:
+load("../data/cyto_national/test_stlouis_backbone/recip/norm_data_TNT.RData")
+mat_cryo_r <- norm_data %>% 
+  set_colnames(gsub("[.]_", "..", colnames(norm_data))) %>% 
+  dplyr::select(c(comm, "Id.Cryostem.R")) %>% 
+  left_join(rd_info, by = "Id.Cryostem.R")
+
+# Extract the information for the D-R in the st louis cohort, for the selected 
+# features that are common between the two cohorts:
+load("../data/cyto/3_backbones/backbone_2_D&Rall/couple_info.RData")
+rd_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(grepl("R", rownames(couple_info))) 
+
+load("../data/cyto/rd/norm_data_TNT.RData")
+mat_louis_dr <- norm_data %>% 
+  dplyr::select(c(comm, "COUPLENUMBER")) %>% 
+  left_join(rd_info, by = "COUPLENUMBER")
+
+# Extract the information for the R in the cryostem cohort, for the selected 
+# features that are common between the two cohorts:
+load("../data/cyto/recip/norm_data_TNT.RData")
+mat_louis_r <- norm_data %>% 
+  set_colnames(gsub("[.]_", "..", colnames(norm_data))) %>% 
+  dplyr::select(c(comm, "Id.Cryostem.R")) %>% 
+  left_join(rd_info, by = "Id.Cryostem.R")
+
+# Plot both D-R and R information on the same graph:
+matc_dr <- mat_cryo_dr %>% arrange(Id.Cryostem.R)
+matc_r <- mat_cryo_r %>% arrange(Id.Cryostem.R)
+
+matl_dr <- mat_louis_dr %>% arrange(Id.Cryostem.R)
+matl_r <- mat_louis_r %>% arrange(Id.Cryostem.R)
+
+# For loop on features:
+#pdf("../../../papier/pdf_27_selected_cytof_ft_0.9_TNT.pdf", height = 8, width = 14)
+for(ft in sel_beh$sel_beh){
+  feature <- ft
+  matc_both <- matc_dr %>% 
+    dplyr::select(c(feature, GROUP, gender_comp, age_recip, Id.Cryostem.R)) %>% 
+    set_colnames(c(paste0("cryo_DR_", feature), "group", "gender_comp", "age_recip", "Id.Cryostem.R")) %>% 
+    left_join(matc_r, by = "Id.Cryostem.R")
+  
+  g1 <- ggplot(matc_both, aes(x = eval(parse(text = feature)), 
+                              y = eval(parse(text = paste0("cryo_DR_", feature))),
+                              col = group)) + 
+    geom_point() +
+    labs(x = paste0(feature, " in recipients"), 
+         y = paste0(feature, " in D - R"),
+         title = paste0(feature, " in Cryostem")) +
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    geom_hline(yintercept=0, linetype="dashed", 
+               color = "red")
+  
+  matl_both <- matl_dr %>% 
+    dplyr::select(c(feature, "GROUP", "gender_comp", "age_recip", Id.Cryostem.R)) %>% 
+    set_colnames(c(paste0("louis_DR_", feature), "group", "gender_comp", "age_recip", "Id.Cryostem.R")) %>% 
+    left_join(matl_r, by = "Id.Cryostem.R")
+  
+  g2 <- ggplot(matl_both, aes(x = eval(parse(text = feature)), 
+                              y = eval(parse(text = paste0("louis_DR_", feature))),
+                              col = group)) + 
+    geom_point() +
+    labs(x = paste0(feature, " in recipients"), 
+         y = paste0(feature, " in D - R"),
+         title = paste0(feature, " in St Louis")) +
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    geom_hline(yintercept=0, linetype="dashed", 
+               color = "red")
+  
+  p <- patchwork::wrap_plots(g1, g2)
+  print(p)
+}
+#dev.off()
+
+## restore original values for the rest of th markdown
+norm_data <- norm_data_cryo
+couple_info <- couple_info_cryo
+rd_info <- rd_info_cryo
+```
+
+We can also visualise the selected features in a graph for the Cryostem cohort. 
+The features that are most correlated among the patients in both cohorts are linked:
+The features that are overexpressed in the tolerant couples are colores in blue, 
+the ones that are overexpressed in the non tolerant couples are colored in red.
+```{r, echo = FALSE}
+selb <- read.xlsx("../data/cyto/rd/perm_val_beh_TNT_90_thresh.xlsx")
+selb <- selb$sel_beh
+data_2use <- norm_data[,c("group", selb)]
+
+plot_correlations(ft_df = data_2use,
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/pctgs_sel_ft_couples_TNT_90.RData",
+                  compar = "TNT",
+                  pval_threshold = 0.01)
+
+```
+
+##### Investigating the link between the selected features, gender compatibility and age recip
+
+Now that we have selected features that seemed to play a role in tolerance that 
+were common to both cohorts (with a threhold over 0.90), we decide to 
+investigate into these features to see if some of them are related to the age
+of the recipients, to the gender compatibility between the donor and recipient,
+to both or to none of these two causes.
+
+I first build new models using the features that were kept in the 
+two cohorts as informative when comparing tolerant and non tolerant patients, 
+and then generate forest plots in PDFs.
+```{r, echo = FALSE, include = FALSE}
+comm <- sel_beh$sel_beh
+new_models <- lapply(seq_along(make.names(comm)), function(idx){
+  dta_tmp <- norm_data[,c(make.names(comm)[idx],
+                        "group", "age_recip", "gender_comp")]
+  colnames(dta_tmp)[1] <- "Var"
+  fit1 <- glm(group ~ Var, data=dta_tmp,trace=F, family = "binomial")
+  fit2 <- glm(group ~ gender_comp + Var,
+              data=dta_tmp,trace=F, family = "binomial")
+  fit3 <- glm(group ~ age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  fit4 <- glm(group ~ gender_comp + age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  list(fit1, fit2, fit3, fit4)
+})
+```
+
+
+```{r, echo = FALSE, include = FALSE}
+plots_gender_age(pdf_name = "../plots/cyto_national/r&d/age_and_gender/tol_nontol_0.9_behavior.pdf",
+                 norm_data = norm_data,
+                 features = make.names(sel_beh$sel_beh), compar = "TNT")
+
+```
+
+#### Feature selection in primary versus secondary tolerant couples:
+
+We apply the same feature selection technique as we used for identifying features
+in tolerant versus non-tolerant couples. This is the resulting distribution of 
+the feature quantiles:
+
+```{r, echo = FALSE}
+rd_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(duplicated(COUPLENUMBER)) %>% 
+  mutate(COUPLENUMBER = as.numeric(COUPLENUMBER))
+
+norm_data <- df_f_couple %>% 
+  rownames_to_column("COUPLENUMBER") %>% 
+  mutate(COUPLENUMBER = as.numeric(COUPLENUMBER)) %>% 
+  left_join(rd_info %>% dplyr::select(COUPLENUMBER, gender_comp, age_recip),
+            by = "COUPLENUMBER")
+```
+
+
+```{r, eval=FALSE, echo=FALSE}
+norm_data <- norm_data %>% 
+  dplyr::filter(group != "non_tolerant") %>% 
+  mutate(group = as.factor(as.character(group))) %>% 
+  column_to_rownames("COUPLENUMBER")
+
+
+# Calculate the number of cores
+no_cores <- detectCores() - 1
+
+# Initiate cluster
+cl<-makeCluster(no_cores)
+ 
+clusterExport(cl, c("norm_data", "perm_val_LR_demo"))
+
+Sys.time()
+perm_vals <- parLapply(cl, seq_along(colnames(norm_data))[-which(colnames(norm_data) %in% c("group", "age_recip", "gender_comp"))], function(feat){
+  perm_val_LR_demo(data = norm_data, nb_perm = 1000, ind_feature = feat)
+})
+
+stopCluster(cl)
+Sys.time()
+
+save(perm_vals, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/rd/perm_vals_PTST.RData")
+save(norm_data, file= "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/rd/norm_data_PTST.RData")
+```
+
+
+```{r, echo = FALSE}
+# Compute the median per group for every feature, to use it later in the graphs:
+
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/rd/perm_vals_PTST.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/rd/norm_data_PTST.RData")
+
+gr_medians <- norm_data %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+# barplot(qt)
+plot(density(qt))
+selected_ft_rd_qt <- colnames(norm_data)[which(qt>.90)]
+selected_ft_rd_qt <- selected_ft_rd_qt[!is.na(selected_ft_rd_qt)]
+# selected_ft_rd_qt
+write.xlsx(selected_ft_rd_qt, 
+           file = "../data/cyto_national/test_stlouis_backbone/rd/perm_val_PTST_90_thresh.xlsx")
+print(paste0(length(selected_ft_rd_qt),
+             " features were selected with a 0.90 threshold in the Cryostem cohort."))
+```
+
+We can see which of these features are common to the St louis cohort:
+```{r, echo = FALSE}
+sel_louis <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/rd/perm_val_PTST_90_thresh.xlsx", colNames = FALSE)
+sel_cryo <- read.xlsx("../data/cyto_national/test_stlouis_backbone/rd/perm_val_PTST_90_thresh.xlsx", colNames = FALSE)
+sel_common <- which(sel_cryo$X1 %in% sel_louis$X1)
+length(sel_common)
+comm <- sel_cryo$X1[sel_common]
+comm
+
+# save these features
+norm_data_tmp <- norm_data %>% 
+  rownames_to_column("COUPLENUMBER")
+pctgs_sel_ft_couples_90 <- norm_data_tmp[,c("group", "COUPLENUMBER", comm)]
+save(pctgs_sel_ft_couples_90,
+     file = "../data/cyto_national/test_stlouis_backbone/rd/pctgs_sel_ft_couples_PTST_90.RData")
+```
+
+Finally, we can see how many of these features had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients)
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_ft_rd_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/cyto_national/test_stlouis_backbone/rd/perm_val_dir_PS_90_thresh.xlsx")
+dir_genes_cryo <- dir_genes
+
+dir_genes_louis <- read.xlsx("../data/cyto/rd/perm_val_dir_PS_90_thresh.xlsx", rowNames = FALSE)
+dir_genes_cryo <- as.data.frame(dir_genes_cryo) %>% 
+  column_to_rownames("V1")
+dir_genes_cryo <- dir_genes_cryo[dir_genes_louis$V1,]
+sel_beh <- dir_genes_louis$V1[which(dir_genes_louis$V2 == dir_genes_cryo)]
+sel_beh <- as.data.frame(sel_beh)
+write.xlsx(sel_beh, file = "../data/cyto/rd/perm_val_beh_PS_90_thresh.xlsx")
+
+print(paste0(length(which(dir_genes_louis$V2 == dir_genes_cryo)),
+             " genes out of the ", length(sel_common),
+             " common selected genes have the same behaviour in both cohorts."))
+print(as.character(sel_beh$sel_beh))
+```
+
+We can visualise how these features change at the couple level:
+I extract information of the expression of these common features in the recipients,
+and in the couples (donor value - recipient value), in the two cohorts:
+```{r, echo = FALSE}
+# Extract the information for the D-R in the cryostem cohort, for the selected 
+# features that are common between the two cohorts:
+norm_data_cryo <- norm_data
+couple_info_cryo <- couple_info
+rd_info_cryo <- rd_info
+
+mat_cryo_dr <- norm_data %>% 
+  rownames_to_column("COUPLENUMBER") %>% 
+  mutate(COUPLENUMBER = as.numeric(COUPLENUMBER)) %>% 
+  dplyr::select(c(comm,"COUPLENUMBER")) %>% 
+  left_join(rd_info, by = "COUPLENUMBER")
+
+# Extract the information for the R in the cryostem cohort, for the selected 
+# features that are common between the two cohorts:
+load("../data/cyto_national/test_stlouis_backbone/recip/norm_data_PTST.RData")
+mat_cryo_r <- norm_data %>% 
+  set_colnames(gsub("[.]_", "..", colnames(norm_data))) %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select(c(comm, "Id.Cryostem.R")) %>% 
+  left_join(rd_info, by = "Id.Cryostem.R")
+
+# Extract the information for the D-R in the st louis cohort, for the selected 
+# features that are common between the two cohorts:
+load("../data/cyto/3_backbones/backbone_2_D&Rall/couple_info.RData")
+rd_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(grepl("R", rownames(couple_info))) 
+
+load("../data/cyto/rd/norm_data_PTST.RData")
+mat_louis_dr <- norm_data %>% 
+  rownames_to_column("COUPLENUMBER") %>% 
+  mutate(COUPLENUMBER = as.numeric(COUPLENUMBER)) %>% 
+  dplyr::select(c(comm, "COUPLENUMBER")) %>% 
+  left_join(rd_info, by = "COUPLENUMBER")
+
+# Extract the information for the R in the cryostem cohort, for the selected 
+# features that are common between the two cohorts:
+load("../data/cyto/recip/norm_data_PTST.RData")
+mat_louis_r <- norm_data %>% 
+  set_colnames(gsub("[.]_", "..", colnames(norm_data))) %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select(c(comm, "Id.Cryostem.R")) %>% 
+  left_join(rd_info, by = "Id.Cryostem.R")
+
+# Plot both D-R and R information on the same graph:
+matc_dr <- mat_cryo_dr %>% arrange(Id.Cryostem.R)
+matc_r <- mat_cryo_r %>% arrange(Id.Cryostem.R)
+
+matl_dr <- mat_louis_dr %>% arrange(Id.Cryostem.R)
+matl_r <- mat_louis_r %>% arrange(Id.Cryostem.R)
+
+# For loop on features:
+for(ft in sel_beh$sel_beh){
+  feature <- ft
+  matc_both <- matc_dr %>% 
+    dplyr::select(c(feature, GROUP, gender_comp, age_recip, Id.Cryostem.R)) %>% 
+    set_colnames(c(paste0("cryo_DR_", feature), "group", "gender_comp", "age_recip", "Id.Cryostem.R")) %>% 
+    left_join(matc_r, by = "Id.Cryostem.R")
+  
+  g1 <- ggplot(matc_both, aes(x = eval(parse(text = feature)), 
+                              y = eval(parse(text = paste0("cryo_DR_", feature))),
+                              col = group)) + 
+    geom_point() +
+    scale_color_manual(breaks = c("primary_tolerant", "secondary_tolerant"),
+                        values=c("green", "blue")) +
+    labs(x = paste0(feature, " in recipients"), 
+         y = paste0(feature, " in D - R"),
+         title = paste0(feature, " in Cryostem")) +
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    geom_hline(yintercept=0, linetype="dashed", 
+               color = "red")
+  
+  matl_both <- matl_dr %>% 
+    dplyr::select(c(feature, "GROUP", "gender_comp", "age_recip", Id.Cryostem.R)) %>% 
+    set_colnames(c(paste0("louis_DR_", feature), "group", "gender_comp", "age_recip", "Id.Cryostem.R")) %>% 
+    left_join(matl_r, by = "Id.Cryostem.R")
+  
+  g2 <- ggplot(matl_both, aes(x = eval(parse(text = feature)), 
+                              y = eval(parse(text = paste0("louis_DR_", feature))),
+                              col = group)) + 
+    geom_point() +
+    scale_color_manual(breaks = c("primary_tolerant", "secondary_tolerant"),
+                        values=c("green", "blue")) +
+    labs(x = paste0(feature, " in recipients"), 
+         y = paste0(feature, " in D - R"),
+         title = paste0(feature, " in St Louis")) +
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    geom_hline(yintercept=0, linetype="dashed", 
+               color = "red")
+  
+  p <- patchwork::wrap_plots(g1, g2)
+  print(p)
+}
+
+## restore original values for the rest of th markdown
+norm_data <- norm_data_cryo
+couple_info <- couple_info_cryo
+rd_info <- rd_info_cryo
+```
+
+##### Link between the selected features, gender compatibility and age recip
+
+Now that we have selected features that seemed to play a role in tolerance that 
+were common to both cohorts (with a threhold over 0.90), we decide to 
+investigate into these features to see if some of them are related to the age
+of the recipients, to the gender compatibility between the donor and recipient,
+to both or to none of these two causes.
+
+I build new models using the features that were kept in the 
+two cohorts as informative when comparing primary versus secondary tolerant 
+patients, and generate PDFs to visualise them.
+```{r, echo = FALSE, include = FALSE}
+new_models <- lapply(seq_along(make.names(comm)), function(idx){
+  dta_tmp <- norm_data[,c(make.names(comm)[idx],
+                        "group", "age_recip", "gender_comp")]
+  colnames(dta_tmp)[1] <- "Var"
+  fit1 <- glm(group ~ Var, data=dta_tmp,trace=F, family = "binomial")
+  fit2 <- glm(group ~ gender_comp + Var,
+              data=dta_tmp,trace=F, family = "binomial")
+  fit3 <- glm(group ~ age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  fit4 <- glm(group ~ gender_comp + age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  list(fit1, fit2, fit3, fit4)
+})
+```
+
+```{r, echo = FALSE, include = FALSE}
+plots_gender_age(pdf_name = "../plots/cyto_national/r&d/age_and_gender/prim_sec_0.9_behavior.pdf",
+                 norm_data = norm_data,
+                 features = make.names(sel_beh$sel_beh), compar = "PTST")
+
+```
+
+# Analysis on the recipients only, on the same backbone:
+
+## Load the data
+
+We then investigate into the **recipients** CyTOF data specifically.
+I load the fcs files and the table containing clinical informations about the
+recipients
+```{r, echo = FALSE}
+fcs_dir <- "~/Documents/VIB/Projects/Integrative_Paris/National_cohort/CYTOF/CYTOF_David_Michonneau_fcs/"
+fcs_names <- list.files(fcs_dir, pattern="^2.*fcs$")
+names(fcs_names) <- gsub("^[0-9]*_([^_]*)_.*", "\\1", fcs_names)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd$GROUP <- as.factor(tolower(samp_rd$GROUP))
+
+## once the dates are readable by R, they are not readable anymore by excel 
+## -> I import what I need from the old table
+
+samp_rd_old <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL.xlsx")
+samp_rd$DELAY_SAMPLE <- samp_rd_old$DELAY_SAMPLE
+
+colnames(samp_rd)[3] <- "Id.Cryostem.R"
+selec_couples <- samp_rd %>%
+  dplyr::filter(DELAY_SAMPLE >= 148) %>%
+  dplyr::filter(!COUPLENUMBER %in% c(32, 71, 50)) %>%
+  dplyr::select(COUPLENUMBER)
+
+samp_rd <- samp_rd[which(samp_rd$COUPLENUMBER %in% selec_couples$COUPLENUMBER),]
+rownames(samp_rd) <- samp_rd$Id.Cryostem.R
+rd_names <- fcs_names[samp_rd$Id.Cryostem.R]
+recip_names <- rd_names[grep("R", names(rd_names))]
+samp_recip <- samp_rd[names(recip_names),]
+save(samp_recip, file = "../data/cyto_national/test_stlouis_backbone/samp_recip.RData")
+```
+
+We can then isolate the recipients profiles, ie, for every recipient, the percentage 
+of her/his cells that mapped to the different FlowSOM metaclusters:
+```{r, echo = FALSE}
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/pctgs_rd.RData")
+pctgs_rd <- pctgs_rd[samp_rd$Id.Cryostem.R,]
+pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclustering, sum)}))
+pctgs_recip <- pctgs_meta_rd[names(recip_names),]
+colnames(pctgs_recip) <- labels
+```
+
+We can visualise the recipients FlowSOM profiles (the percentage of cells of the 
+patients that map to the different metaclusters) in a tSNE map, to see which 
+recipients are most similar:
+
+```{r, echo = FALSE}
+set.seed(1)
+tsne_recip_louis <- Rtsne::Rtsne(pctgs_recip, perplexity = 10)
+tsne_2plot <- as.data.frame(tsne_recip_louis$Y) %>% 
+  magrittr::set_colnames(c("X1", "X2")) %>% 
+  mutate(Id.Cryostem.R = rownames(pctgs_recip)) %>% 
+  left_join(samp_recip, by = "Id.Cryostem.R")
+ggplot(tsne_2plot, aes(x = X1, y = X2, col = as.factor(GROUP), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+In the St Louis cohort, we had observed a specific cluster of non tolerant patients
+(containing R690, R598, R219, R830, ...). Here,
+I generate a tSNE with the recipients from both St Louis and Cryostem cohorts,
+to see if some of the cryostem recipients would be similar to the St Louis non tolerant 
+specific cluster.
+
+```{r, echo = FALSE}
+# pctgs_recip Cryostem :
+pctgs_recip_cryo <- as.data.frame(pctgs_recip) %>%
+  magrittr::set_colnames(labels) %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(cohort = rep("Cryostem", nrow(pctgs_recip)))
+
+# pctgs_recip St Louis :
+load("../data/cyto/3_backbones/backbone_2_D&Rall/pctgs_meta_recip.RData")
+pctgs_recip_louis <- as.data.frame(pctgs_recip) %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(cohort = rep("St Louis", nrow(pctgs_recip)))
+
+# samp_recip Cryostem :
+samp_recip_cryo <- samp_recip
+recip_cryo <- samp_recip %>% 
+  dplyr::select(GROUP, Id.Cryostem.R, CMVStatus, DATEOFCYTOFEXPERIMENT) %>% 
+  left_join(pctgs_recip_cryo) %>% 
+  mutate(DATEOFCYTOFEXPERIMENT = as.Date(DATEOFCYTOFEXPERIMENT, 
+                                         format = "%d.%m.%Y"))
+
+# samp_recip St Louis :
+load("../data/cyto/3_backbones/backbone_2_D&Rall/samp_recip.RData")
+samp_recip_louis <- samp_recip
+recip_louis <- samp_recip %>% 
+  dplyr::select(GROUP, Id.Cryostem.R, CMVStatus, DATEOFCYTOFEXPERIMENT) %>% 
+  left_join(pctgs_recip_louis)
+
+# combination of all percentages:
+all_pct <- rbind(pctgs_recip_louis,
+                 pctgs_recip_cryo) %>% 
+  dplyr::select(-cohort) %>% 
+  column_to_rownames("Id.Cryostem.R")
+all_info <- rbind(recip_louis,
+                  recip_cryo)
+
+tsne_all_recip <- Rtsne::Rtsne(all_pct, perplexity = 10)
+tsne_2plot <- as.data.frame(tsne_all_recip$Y) %>% 
+  magrittr::set_colnames(c("X1", "X2")) %>% 
+  mutate(Id.Cryostem.R = rownames(all_pct)) %>% 
+  left_join(all_info, by = "Id.Cryostem.R")
+
+# Load the cryostem pctgs and samp_recip for the rest of the analysis:
+pctgs_recip <- pctgs_recip_cryo %>% 
+  dplyr::select(-cohort) %>% 
+  column_to_rownames("Id.Cryostem.R")
+samp_recip <- samp_recip_cryo
+```
+
+I can first color the recipients based on their cohort. The recipients of the
+same cohort do not seem to "cluster" together:
+```{r, echo = FALSE, fig.height = 6, fig.width = 8}
+ggplot(tsne_2plot, aes(x = X1, y = X2, col = as.factor(cohort), 
+                       label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+I can also color the patients per day of cytof experiment, to see how batch 
+affected the data is:
+The recipients do not seem like they cluster together per batch.
+
+
+```{r, echo = FALSE, fig.height = 6, fig.width = 10}
+ggplot(tsne_2plot, aes(x = X1, y = X2, col = as.factor(DATEOFCYTOFEXPERIMENT), 
+                       shape=as.factor(cohort), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+The recipients of the cryostem cohort that are closest to the non tolerant specific 
+St Louis cluster are mainly CMV positive patients.
+```{r, echo = FALSE, fig.height = 6, fig.width = 8}
+ggplot(tsne_2plot, aes(x = X1, y = X2, col = as.factor(CMVStatus), 
+                       label = Id.Cryostem.R)) + 
+  geom_point() +
+  scale_color_manual(values=c("grey", "black", "white")) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+If we observe the metaclusters of the recipients, we see that the 
+CMV+ Cryostem patients seem to have many CD8 TEM/ TEMRA cells,
+and less B naive cells, regardless of their tolerance group. They share
+these characteristics with the St Louis group containing R690, R598, ...
+```{r, echo = FALSE, fig.height = 20, fig.width = 10}
+pctgs_2plot <- all_info %>% 
+  column_to_rownames("Id.Cryostem.R")
+annot_colors <- list(GROUP = c("non_tolerant" = "red", 
+                               "primary_tolerant" = "green",
+                               "secondary_tolerant" = "blue"),
+                     CMVStatus = c("0" = "white", "1" = "black"),
+                     cohort = c("Cryostem" = "grey", "St Louis" = "purple"))
+pheatmap(pctgs_2plot[,colnames(all_pct)], 
+         annotation_row = pctgs_2plot[,c("GROUP", "CMVStatus", "cohort")],
+         annotation_colors = annot_colors)
+# pdf("~/Desktop/heatmap_pctgs_2cohorts.pdf", height = 15, width = 20)
+# p <- pheatmap(pctgs_2plot[,colnames(all_pct)], 
+#          annotation_row = pctgs_2plot[,c("GROUP", "CMVStatus", "cohort")],
+#          annotation_colors = annot_colors)
+# print(p)
+# dev.off()
+```
+
+I can also color the tSNE plot per Gender compatibility and recipients age:
+But it doesn't look like these two features play a role here
+```{r, echo = FALSE, fig.height = 6, fig.width = 8}
+load("../data/cyto_national/test_stlouis_backbone/couple_info.RData")
+couple_info_cryo <- couple_info 
+colnames(couple_info_cryo)[which(colnames(couple_info_cryo) %in% c("Gender", "DOG"))] <-
+  c("GENDER", "DATEOFSAMPLE")
+
+load("../data/cyto/3_backbones/backbone_2_D&Rall/couple_info.RData")
+couple_info_louis <- couple_info %>% 
+  dplyr::select(-CMVStatus, -cmv_comp)
+
+couple_info_all <- rbind(couple_info_louis, couple_info_cryo) 
+couple_info_all <- couple_info_all[grep("R", rownames(couple_info_all)),] %>% 
+  rownames_to_column("Id.Cryostem.R")
+
+new_tsne_2plot <- tsne_2plot %>% 
+  left_join(couple_info_all, by = "Id.Cryostem.R")
+
+ggplot(new_tsne_2plot, aes(x = X1, y = X2, col = as.factor(gender_comp), 
+                       label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+
+ggplot(new_tsne_2plot, aes(x = X1, y = X2, col = age_recip, 
+                       label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+## Functional markers
+
+I extract the ratios of cells that are positive for the functional markers,
+based on the thresholds that Laetitia has provided.
+```{r, echo = FALSE}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/funct_markers/ratios_funct_meta_rd.RData")
+patient_names <- gsub("^[0-9]*_([^_]*)_.*", "\\1", names(result))
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/funct_mark_res_13_06.RData")
+
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/funct_mark_res_13_06.RData")
+funct_marker_tables <- lapply(tables_res, function(mat){
+  mat <- as.data.frame(t(mat) )
+})
+
+funct_big_table <- do.call(cbind, funct_marker_tables)
+rownames(funct_big_table) <- patient_names
+funct_recip <- funct_big_table[names(recip_names),]
+colnames(funct_recip) <- gsub(".[0-9]*$", "_", colnames(funct_recip))
+colnames(funct_recip) <- paste0(colnames(funct_recip), colnames(pctgs_recip))
+```
+
+## Phenotypic and functional markers
+
+We can merge information about the percentages in the FlowSOM metaclusters 
+and the percentage of positive cells for the functional markers in these metaclusters.
+This is what we use to define patient profiles in the following analyses.
+
+We can visualise the recipients phenotypic + functional profiles by running
+a PCA:
+
+```{r, echo = FALSE}
+recip_pheno_funct <- merge(as.data.frame(pctgs_recip), as.data.frame(funct_recip), by = "row.names") %>%
+  column_to_rownames("Row.names")
+
+pca_recip <- prcomp(as.matrix(recip_pheno_funct))
+
+pca_2plot <- as.data.frame(pca_recip$x) %>% 
+  mutate(Id.Cryostem.R = rownames(pca_recip$x)) %>% 
+  left_join(samp_recip, by = "Id.Cryostem.R")
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(GROUP), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+
+pheno_funct <- recip_pheno_funct %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  left_join(samp_recip %>% 
+              dplyr::select(Id.Cryostem.R, GROUP) %>% 
+              mutate(group = GROUP)) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  dplyr::select(-GROUP)
+
+colnames(pheno_funct) <- make.names(colnames(pheno_funct))
+```
+
+#### Feature selection in tolerant versus non tolerant recipients:
+
+We aim to apply the feature selection technique that we already described above
+to identify features that differ between tolerant and non tolerant recipients.
+```{r, echo = FALSE}
+recip_info <- couple_info_cryo %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(grepl("R", rownames(couple_info_cryo))) 
+
+norm_data <- pheno_funct %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  left_join(recip_info %>% dplyr::select(Id.Cryostem.R, gender_comp, age_recip),
+            by = "Id.Cryostem.R") %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+recip_path <- "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/log2/recip/"
+```
+
+It looks like the distribution of the CyTOF features among the patients is 
+quite right skewed, so we log2 transform it, so that the data is more fit for 
+the models that we build.
+
+
+```{r, echo = FALSE}
+par(mfrow = c(1,2))
+
+idx_1 <- 1
+hist(norm_data[,idx_1], breaks = 70, main = colnames(norm_data)[idx_1])
+hist(log2(norm_data[,idx_1]), breaks = 70, main = paste0("log2 ", colnames(norm_data)[idx_1]))
+
+
+idx_2 <- 3
+hist(norm_data[,idx_2], breaks = 70, main = colnames(norm_data)[idx_2])
+hist(log2(norm_data[,idx_2]), breaks = 70, main = paste0("log2 ", colnames(norm_data)[idx_2]))
+
+
+idx_3 <- 68
+hist(norm_data[,idx_3], breaks = 70, main = colnames(norm_data)[idx_3])
+hist(log2(norm_data[,idx_3]), breaks = 70, main = paste0("log2 ", colnames(norm_data)[idx_3]))
+
+# replace zeros by half of the smallest value, and then
+# log2 transform all CyTOF features:
+norm_data_orig <- norm_data
+nd <- norm_data %>% dplyr::select(-group, -age_recip, -gender_comp)
+norm_data <- apply(nd, 2, function(x){
+  if(all(x>=0)==FALSE){
+    x[x<0] <- 0
+  }
+  smallest <- min(x[x>0])
+  x[x==0] <- smallest/2
+  log2(x)
+  }) %>% as.data.frame %>% 
+  rownames_to_column("rn") %>% 
+  mutate(group = norm_data_orig$group,
+         age_recip = norm_data_orig$age_recip,
+         gender_comp = norm_data_orig$gender_comp) %>% 
+  column_to_rownames("rn")
+```
+
+We can then apply feature selection as was previousely described.
+
+```{r, eval=FALSE, echo=FALSE}
+# compute the permutation distribution for non vs tolerant recipients.
+
+norm_data$group <- as.character(norm_data$group)
+norm_data$group[which(norm_data$group!="non_tolerant")] <- "tolerant"
+norm_data$group <- as.factor(norm_data$group)
+
+# Calculate the number of cores
+no_cores <- detectCores() - 1
+
+# Initiate cluster
+cl<-makeCluster(no_cores)
+ 
+clusterExport(cl, c("norm_data", "perm_val_LR_demo"))
+
+Sys.time()
+perm_vals <- parLapply(cl, seq_along(colnames(norm_data))[-which(colnames(norm_data) %in% c("group", "age_recip", "gender_comp"))], function(feat){
+  perm_val_LR_demo(data = norm_data, nb_perm = 1000, ind_feature = feat)
+})
+
+stopCluster(cl)
+Sys.time()
+
+save(perm_vals, file = paste0(recip_path,"perm_vals_TNT.RDS"))
+save(norm_data, file= paste0(recip_path, "norm_data_TNT.RDS"))
+```
+
+```{r, echo = FALSE}
+# Compute the median per group for every feature, to use it later in the graphs:
+
+load(paste0(recip_path, "perm_vals_TNT.RDS"))
+norm_data <- readRDS(paste0(recip_path, "norm_data_TNT.RDS"))
+
+gr_medians <- norm_data %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+```{r, echo = FALSE}
+selected_ft_recip_qt <- select_features(perm_vals = perm_vals,
+                                        norm_data = norm_data,
+                                        threshold = 0.90,
+                                        file_path = recip_path,
+                                        file_name = "perm_val_TNT_90_thresh.xlsx") 
+
+print(paste0(length(selected_ft_recip_qt),
+             " features were selected with a 0.90 threshold in the Cryostem cohort."))
+```
+
+We can then see which of these features are common to the St louis cohort:
+```{r, echo = FALSE}
+common_features <- find_common_features(
+  selected_features = selected_ft_recip_qt,
+  ndata = norm_data,
+  other_features_file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/log2/recip/perm_val_TNT_90_thresh.xlsx",
+  other_norm_data_file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/log2/recip/norm_data_TNT.RDS",
+  file_path = recip_path,
+  file_name = "pctgs_sel_ft_recip_TNT_90.RDS")
+```
+
+Finally, we identify the features that had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of recipients)
+```{r, echo = FALSE}
+common_beh_features <- find_common_behaviour_features(list_common_features = common_features,
+                                                      file_path = recip_path,
+                                                      common_ft_file_name = "perm_val_dir_TNT_90_thresh.xlsx",
+                                                      common_beh_file_name = "perm_val_beh_TNT_90_thresh.xlsx")
+common_beh_features
+
+```
+
+We can then visualise these common features in boxplots of the two cohorts:
+```{r, echo = FALSE}
+visualise_features_in_boxplots(common_features)
+```
+
+Same boxplots, but with original values on the y-axis instead of scaled ones:
+```{r}
+# pheno_funct contains unscaled values of the crysotem cohort
+# common_features$local_df contains scaled values of the cryostem cohort, 
+  # together with patients to plot (rownames)
+cryo_unscaled <- pheno_funct[rownames(common_features$local_df),] %>% 
+  magrittr::set_colnames(make.names(colnames(.)))
+gr_tmp <- as.character(cryo_unscaled$group)
+gr_tmp[which(gr_tmp != "non_tolerant")] <- "tolerant"
+cryo_unscaled$group <- as.factor(gr_tmp)
+# louis unscaled contains unscaled values of all (D and R) patients of St Louis
+louis_unscaled <- readRDS("../data/cyto/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+# common_features$other_df contains scaled values of the st louis cohort, 
+  # together with patients to plot (rownames)
+louis_unscaled <- louis_unscaled[rownames(common_features$other_df),] %>% 
+  magrittr::set_colnames(make.names(colnames(.)))
+gr_tmp <- as.character(louis_unscaled$group)
+gr_tmp[which(gr_tmp != "non_tolerant")] <- "tolerant"
+louis_unscaled$group <- as.factor(gr_tmp)
+# small bug: colnames of louis contain ".." instead of "._"
+# small fix:
+coln_tmp <- colnames(louis_unscaled)
+coln_replaced <- coln_tmp %>%
+  str_replace_all(c("X.41BB.." = "X.41BB._", "X.CD24.." = "X.CD24._", "X.CD25.." = "X.CD25._",
+                    "X.CD38.." = "X.CD38._", "X.CTLA4.." = "X.CTLA4._", "X.Granzyme.B.." = "X.Granzyme.B._",
+                    "X.HLADR.." = "X.HLADR._", "X.ICOS.." = "X.ICOS._", "X.IL10.." = "X.IL10._",
+                    "X.LagT.." = "X.LagT._", "X.OX40.." = "X.OX40._", "X.PD1.." = "X.PD1._",
+                    "X.Tim3.." = "X.Tim3._"))
+colnames(louis_unscaled) <- coln_replaced
+
+compar <- "TNT"
+
+pdf("~/Desktop/figS5_TNT_features.pdf", width = 8, height = 6)
+for(i in common_features$common_features){
+    cryo_tmp <- cryo_unscaled %>% 
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+
+    louis_tmp <- louis_unscaled %>%
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+
+    ymin <- min(c(cryo_tmp$Var, louis_tmp$Var))
+    ymax <- max(c(cryo_tmp$Var, louis_tmp$Var))
+
+    if(compar == "TNT"){
+      g1<- ggplot(cryo_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+        geom_jitter(aes(x = group, y = Var, col = group)) + theme_minimal() +
+        coord_cartesian(ylim = c(ymin, ymax)) +
+        ggtitle(paste0(i," in Cryostem"))+
+        theme(plot.title = element_text(size = 10, face = "bold"))
+
+      g2<- ggplot(louis_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+        geom_jitter(aes(x = group, y = Var, col = group)) + theme_minimal() +
+        coord_cartesian(ylim = c(ymin, ymax)) +
+        ggtitle(paste0(i," in St Louis")) +
+        theme(plot.title = element_text(size = 10, face = "bold"))
+    } else if(compar == "PTST"){
+      g1<- ggplot(cryo_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+        geom_jitter(aes(x = group, y = Var, col = group)) + theme_minimal() +
+        scale_color_manual(values = c("green3", "blue")) +
+        coord_cartesian(ylim = c(ymin, ymax)) +
+        ggtitle(paste0(i," in Cryostem"))+
+        theme(plot.title = element_text(size = 10, face = "bold"))
+
+      g2<- ggplot(louis_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+        geom_jitter(aes(x = group, y = Var, col = group)) + theme_minimal() +
+        scale_color_manual(values = c("green3", "blue")) +
+        coord_cartesian(ylim = c(ymin, ymax)) +
+        ggtitle(paste0(i," in St Louis")) +
+        theme(plot.title = element_text(size = 10, face = "bold"))
+    }
+
+    gmix <- patchwork::wrap_plots(g1, g2)
+    print(gmix)
+}
+dev.off()
+```
+
+And compute the associated p-values:
+```{r, echo = FALSE}
+pvals <- lapply(common_features$common_features, function(i){
+  cryo_tmp <- common_features$local_df %>%
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+
+    louis_tmp <- common_features$other_df %>%
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+    
+    pval_louis <- wilcox.test(louis_tmp$Var[which(louis_tmp$group == "tolerant")],
+                louis_tmp$Var[which(louis_tmp$group == "non_tolerant")], exact = FALSE)$p.value
+    
+    pval_cryo <- wilcox.test(cryo_tmp$Var[which(cryo_tmp$group == "tolerant")],
+                cryo_tmp$Var[which(cryo_tmp$group == "non_tolerant")], exact = FALSE)$p.value
+    list(var = i, pval_louis = pval_louis, pval_cryo = pval_cryo)
+})
+
+bla <- do.call(rbind.data.frame, pvals)
+feature_pvalues <- bla[which(bla$var %in% common_beh_features),]
+write.xlsx(feature_pvalues, file = "~/Desktop/pvalues_cyto_recip_TNT.xlsx")    
+```
+
+Graph of these selected features:
+```{r, echo = FALSE, eval = FALSE}
+data_2use <- norm_data[, c("group", common_beh_features)]
+
+plot_correlations(ft_df = data_2use,
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/log2/recip/pctgs_sel_ft_recip_TNT_90.RDS",
+                  compar = "TNT",
+                  pval_threshold = 0.01)
+```
+
+##### Investigating the link between tolerance, gender compatibility and age recip
+
+Now that we have selected features that seemed to play a role in tolerance that 
+were common to both cohorts (with a threhold over 0.90), we decide to 
+investigate into these features to see if some of them are related to the age
+of the recipients, to the gender compatibility between the donor and recipient,
+to both or to none of these two causes.
+
+I build new models using the four features that were kept in the 
+two cohorts as informative when comparing primary and secondary tolerant patients
+and generate forest plots in PDFs.
+```{r, include = FALSE}
+new_models <- lapply(seq_along(common_features$common_features), function(idx){
+  dta_tmp <- norm_data[,c(common_features$common_features[idx],
+                        "group", "age_recip", "gender_comp")]
+  colnames(dta_tmp)[1] <- "Var"
+  fit1 <- glm(group ~ Var, data=dta_tmp,trace=F, family = "binomial")
+  fit2 <- glm(group ~ gender_comp + Var,
+              data=dta_tmp,trace=F, family = "binomial")
+  fit3 <- glm(group ~ age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  fit4 <- glm(group ~ gender_comp + age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  list(fit1, fit2, fit3, fit4)
+})
+```
+
+```{r, include = FALSE, eval = FALSE}
+plots_gender_age2(pdf_name = "../plots/cyto_national/recip/age_and_gender/tol_nontol_0.9_behavior.pdf",
+                 norm_data = norm_data, 
+                 features = common_beh_features, compar = "TNT",
+                 excel_name = "../plots/cyto_national/recip/age_and_gender/tol_nontol_0.9_behavior.xlsx")
+
+```
+
+#### Feature selection in primary versus secondary tolerant recipients
+
+We run feature selection to identify features of interest when comparing 
+primary versus secondary tolerant recipients.
+```{r, echo = FALSE}
+recip_info <- couple_info_cryo %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(grepl("R", rownames(couple_info_cryo))) 
+
+norm_data <- pheno_funct %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  left_join(recip_info %>% dplyr::select(Id.Cryostem.R, gender_comp, age_recip),
+            by = "Id.Cryostem.R") %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+recip_path <- "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/log2/recip/"
+```
+
+```{r, echo = FALSE}
+# replace zeros by half of the smallest value, and then
+# log2 transform all CyTOF features:
+norm_data_orig <- norm_data
+nd <- norm_data %>% dplyr::select(-group, -age_recip, -gender_comp)
+norm_data <- apply(nd, 2, function(x){
+  if(all(x>=0)==FALSE){
+    x[x<0] <- 0
+  }
+  smallest <- min(x[x>0])
+  x[x==0] <- smallest/2
+  log2(x)
+  }) %>% as.data.frame %>% 
+  rownames_to_column("rn") %>% 
+  mutate(group = norm_data_orig$group,
+         age_recip = norm_data_orig$age_recip,
+         gender_comp = norm_data_orig$gender_comp) %>% 
+  column_to_rownames("rn")
+```
+
+```{r, eval=FALSE, echo=FALSE}
+# compute the permutation distribution for 1 vs 2 tolerant recipients.
+
+norm_data <- norm_data %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(group != "non_tolerant") %>% 
+  mutate(group = as.factor(as.character(group))) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+# Calculate the number of cores
+no_cores <- detectCores() - 1
+
+# Initiate cluster
+cl<-makeCluster(no_cores)
+ 
+clusterExport(cl, c("norm_data", "perm_val_LR_demo"))
+
+Sys.time()
+perm_vals <- parLapply(cl, seq_along(colnames(norm_data))[-which(colnames(norm_data) %in% c("group", "age_recip", "gender_comp"))], function(feat){
+  perm_val_LR_demo(data = norm_data, nb_perm = 1000, ind_feature = feat)
+})
+
+stopCluster(cl)
+Sys.time()
+
+saveRDS(perm_vals, file = paste0(recip_path, "perm_vals_PTST.RDS"))
+saveRDS(norm_data, file = paste0(recip_path, "norm_data_PTST.RDS"))
+```
+
+```{r, echo = FALSE}
+# Compute the median per group for every gene, to use it later in the graphs:
+
+perm_vals <- readRDS(paste0(recip_path, "perm_vals_PTST.RDS"))
+norm_data <- readRDS(paste0(recip_path, "norm_data_PTST.RDS"))
+gr_medians <- norm_data %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+```{r, echo = FALSE}
+selected_ft_recip_qt <- select_features(perm_vals = perm_vals,
+                                        norm_data = norm_data,
+                                        threshold = 0.90,
+                                        file_path = recip_path,
+                                        file_name = "perm_val_PTST_90_thresh.xlsx") 
+
+print(paste0(length(selected_ft_recip_qt),
+             " features were selected with a 0.90 threshold in the Cryostem cohort."))
+```
+
+We can then see which of these features are common to the St louis cohort:
+```{r, echo = FALSE}
+common_features <- find_common_features(
+  selected_features = selected_ft_recip_qt,
+  ndata = norm_data,
+  other_features_file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/log2/recip/perm_val_PTST_90_thresh.xlsx",
+  other_norm_data_file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/log2/recip/norm_data_PTST.RDS",
+  file_path = recip_path,
+  file_name = "pctgs_sel_ft_recip_PTST_90.RDS")
+```
+
+We can see how many of these features had the same behaviour in the two cohorts 
+(ie, were over or underexpressed in the same group of patients)
+```{r, echo = FALSE}
+common_beh_features <- find_common_behaviour_features(list_common_features = common_features,
+                                                      file_path = recip_path,
+                                                      common_ft_file_name = "perm_val_dir_PTST_90_thresh.xlsx",
+                                                      common_beh_file_name = "perm_val_beh_PTST_90_thresh.xlsx")
+common_beh_features
+
+```
+
+We can then visualise these common features in boxplots of the two cohorts:
+```{r, echo = FALSE}
+# pdf(file = "~/Documents/VIB/Projects/Integrative_Paris/papier/figures/boxplots_2_cyto_R_PTST_st_louis.pdf",
+#     height = 6, width = 11)
+visualise_features_in_boxplots(common_features, compar = "PTST")
+# dev.off()
+```
+
+Same boxplots, but with original values on the y-axis instead of scaled ones:
+```{r}
+# pheno_funct contains unscaled values of the crysotem cohort
+# common_features$local_df contains scaled values of the cryostem cohort, 
+  # together with patients to plot (rownames)
+cryo_unscaled <- pheno_funct[rownames(common_features$local_df),] %>% 
+  magrittr::set_colnames(make.names(colnames(.)))
+# louis unscaled contains unscaled values of all (D and R) patients of St Louis
+louis_unscaled <- readRDS("../data/cyto/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+# common_features$other_df contains scaled values of the st louis cohort, 
+  # together with patients to plot (rownames)
+louis_unscaled <- louis_unscaled[rownames(common_features$other_df),] %>% 
+  magrittr::set_colnames(make.names(colnames(.)))
+# small bug: colnames of louis contain ".." instead of "._"
+# small fix:
+coln_tmp <- colnames(louis_unscaled)
+coln_replaced <- coln_tmp %>%
+  str_replace_all(c("X.41BB.." = "X.41BB._", "X.CD24.." = "X.CD24._", "X.CD25.." = "X.CD25._",
+                    "X.CD38.." = "X.CD38._", "X.CTLA4.." = "X.CTLA4._", "X.Granzyme.B.." = "X.Granzyme.B._",
+                    "X.HLADR.." = "X.HLADR._", "X.ICOS.." = "X.ICOS._", "X.IL10.." = "X.IL10._",
+                    "X.LagT.." = "X.LagT._", "X.OX40.." = "X.OX40._", "X.PD1.." = "X.PD1._",
+                    "X.Tim3.." = "X.Tim3._"))
+colnames(louis_unscaled) <- coln_replaced
+
+compar <- "PTST"
+
+for(i in common_features$common_features){
+    cryo_tmp <- cryo_unscaled %>% 
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+
+    louis_tmp <- louis_unscaled %>%
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+
+    ymin <- min(c(cryo_tmp$Var, louis_tmp$Var))
+    ymax <- max(c(cryo_tmp$Var, louis_tmp$Var))
+
+    if(compar == "TNT"){
+      g1<- ggplot(cryo_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+        geom_jitter(aes(x = group, y = Var, col = group)) + theme_minimal() +
+        coord_cartesian(ylim = c(ymin, ymax)) +
+        ggtitle(paste0(i," in Cryostem"))+
+        theme(plot.title = element_text(size = 10, face = "bold"))
+
+      g2<- ggplot(louis_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+        geom_jitter(aes(x = group, y = Var, col = group)) + theme_minimal() +
+        coord_cartesian(ylim = c(ymin, ymax)) +
+        ggtitle(paste0(i," in St Louis")) +
+        theme(plot.title = element_text(size = 10, face = "bold"))
+    } else if(compar == "PTST"){
+      g1<- ggplot(cryo_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+        geom_jitter(aes(x = group, y = Var, col = group)) + theme_minimal() +
+        scale_color_manual(values = c("green3", "blue")) +
+        coord_cartesian(ylim = c(ymin, ymax)) +
+        ggtitle(paste0(i," in Cryostem"))+
+        theme(plot.title = element_text(size = 10, face = "bold"))
+
+      g2<- ggplot(louis_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+        geom_jitter(aes(x = group, y = Var, col = group)) + theme_minimal() +
+        scale_color_manual(values = c("green3", "blue")) +
+        coord_cartesian(ylim = c(ymin, ymax)) +
+        ggtitle(paste0(i," in St Louis")) +
+        theme(plot.title = element_text(size = 10, face = "bold"))
+    }
+
+    gmix <- patchwork::wrap_plots(g1, g2)
+    print(gmix)
+  }
+```
+
+
+And compute the associated p-values:
+```{r, echo = FALSE}
+pvals <- lapply(common_features$common_features, function(i){
+  cryo_tmp <- common_features$local_df %>%
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+
+    louis_tmp <- common_features$other_df %>%
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+    
+    pval_louis <- wilcox.test(louis_tmp$Var[which(louis_tmp$group == "primary_tolerant")],
+                louis_tmp$Var[which(louis_tmp$group == "secondary_tolerant")], exact = FALSE)$p.value
+    
+    pval_cryo <- wilcox.test(cryo_tmp$Var[which(cryo_tmp$group == "primary_tolerant")],
+                cryo_tmp$Var[which(cryo_tmp$group == "secondary_tolerant")], exact = FALSE)$p.value
+    list(var = i, pval_louis = pval_louis, pval_cryo = pval_cryo)
+})
+
+bla <- do.call(rbind.data.frame, pvals)
+feature_pvalues <- bla[which(bla$var %in% common_beh_features),]
+write.xlsx(feature_pvalues, file = "~/Desktop/pvalues_cyto_recip_PTST.xlsx")    
+```
+
+#### Investigating the link between tolerance, gender compatibility and age recip
+
+Now that we have selected features that seemed to play a role in tolerance that 
+were common to both cohorts (with a threhold over 0.90), we decide to 
+investigate into these features to see if some of them are related to the age
+of the recipients, to the gender compatibility between the donor and recipient,
+to both or to none of these two causes.
+
+I first build new models using the four features that were kept in the 
+two cohorts as informative when comparing primary and secondary tolerant patients 
+and generate forest plots in PDFs.
+```{r, include = FALSE}
+new_models <- lapply(seq_along(common_features$common_features), function(idx){
+  dta_tmp <- norm_data[,c(common_features$common_features[idx],
+                        "group", "age_recip", "gender_comp")]
+  colnames(dta_tmp)[1] <- "Var"
+  fit1 <- glm(group ~ Var, data=dta_tmp,trace=F, family = "binomial")
+  fit2 <- glm(group ~ gender_comp + Var,
+              data=dta_tmp,trace=F, family = "binomial")
+  fit3 <- glm(group ~ age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  fit4 <- glm(group ~ gender_comp + age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  list(fit1, fit2, fit3, fit4)
+})
+```
+
+
+```{r, include = FALSE, eval = FALSE}
+plots_gender_age2(pdf_name = "../plots/cyto_national/recip/age_and_gender/prim_sec_0.9_behavior.pdf",
+                 norm_data = norm_data, 
+                 features = common_beh_features, compar = "PTST",
+                 excel_name = "../plots/cyto_national/recip/age_and_gender/prim_sec_0.9_behavior.xlsx" )
+
+```
+
+Now that we have generated forest plots and associated statistics, we can see 
+which of the selected features that had the same behaviour in both cohorts were
+consistently associated with age or gender. In the tolerant versus non-tolerant
+recipients:
+```{r}
+louis <- read.xlsx("../plots/cyto/recip/age_and_gender/tol_nontol_0.9_behavior.xlsx", 
+                   rowNames = TRUE)
+cryo <- read.xlsx("../plots/cyto_national/recip/age_and_gender/tol_nontol_0.9_behavior.xlsx",
+                  rowNames = TRUE)
+gender_ft <- c()
+age_ft <- c()
+gender_age_ft <- c()
+
+for(ft in rownames(louis)){
+  l_ft <- louis[ft,]
+  c_ft <- cryo[ft,]
+  if(l_ft$pval_var < 0.05 & l_ft$pval_var_gender > 0.05 & 
+     c_ft$pval_var < 0.05 & c_ft$pval_var_gender > 0.05 &
+     sign(l_ft$beta_var_gender) == sign(c_ft$beta_var_gender)){
+    gender_ft <- c(gender_ft, ft)
+  }
+  
+  if(l_ft$pval_var < 0.05 & l_ft$pval_var_age > 0.05 & 
+     c_ft$pval_var < 0.05 & c_ft$pval_var_age > 0.05 &
+     sign(l_ft$beta_var_age) == sign(c_ft$beta_var_age)){
+    age_ft <- c(age_ft, ft)
+  }
+  
+  if(l_ft$pval_var < 0.05 & l_ft$pval_var_gender_age > 0.05 & 
+     c_ft$pval_var < 0.05 & c_ft$pval_var_gender_age > 0.05 &
+     sign(l_ft$beta_var_age) == sign(c_ft$beta_var_age)){
+    gender_age_ft <- c(gender_age_ft, ft)
+  }
+  
+}
+
+print("These features are associated with gender in both cohorts:")
+gender_ft
+print("These features are associated with age in both cohorts:")
+age_ft
+print("These features are associated with gender and age in both cohorts:")
+gender_age_ft[which(!gender_age_ft %in% unique(age_ft, gender_ft))]
+```
+
+In the primary versus secondary-tolerant recipients:
+```{r}
+louis <- read.xlsx("../plots/cyto/recip/age_and_gender/prim_sec_0.9_behavior.xlsx", 
+                   rowNames = TRUE)
+cryo <- read.xlsx("../plots/cyto_national/recip/age_and_gender/prim_sec_0.9_behavior.xlsx",
+                  rowNames = TRUE)
+gender_ft <- c()
+age_ft <- c()
+gender_age_ft <- c()
+
+for(ft in rownames(louis)){
+  l_ft <- louis[ft,]
+  c_ft <- cryo[ft,]
+  if(l_ft$pval_var < 0.05 & l_ft$pval_var_gender > 0.05 & 
+     c_ft$pval_var < 0.05 & c_ft$pval_var_gender > 0.05 &
+     sign(l_ft$beta_var_gender) == sign(c_ft$beta_var_gender)){
+    gender_ft <- c(gender_ft, ft)
+  }
+  
+  if(l_ft$pval_var < 0.05 & l_ft$pval_var_age > 0.05 & 
+     c_ft$pval_var < 0.05 & c_ft$pval_var_age > 0.05 &
+     sign(l_ft$beta_var_age) == sign(c_ft$beta_var_age)){
+    age_ft <- c(age_ft, ft)
+  }
+  
+  if(l_ft$pval_var < 0.05 & l_ft$pval_var_gender_age > 0.05 & 
+     c_ft$pval_var < 0.05 & c_ft$pval_var_gender_age > 0.05 &
+     sign(l_ft$beta_var_age) == sign(c_ft$beta_var_age)){
+    gender_age_ft <- c(gender_age_ft, ft)
+  }
+  
+}
+
+print("These features are associated with gender in both cohorts:")
+gender_ft
+print("These features are associated with age in both cohorts:")
+age_ft
+print("These features are associated with gender and age in both cohorts:")
+gender_age_ft
+```
+
+# Analysis on the donors only, on the same backbone:
+
+## Load the data
+
+We then investigate into the **donors** CyTOF data specifically.
+I load the fcs files and the table containing clinical informations about the
+donors
+```{r, echo = FALSE}
+fcs_dir <- "~/Documents/VIB/Projects/Integrative_Paris/National_cohort/CYTOF/CYTOF_David_Michonneau_fcs/"
+fcs_names <- list.files(fcs_dir, pattern="^2.*fcs$")
+names(fcs_names) <- gsub("^[0-9]*_([^_]*)_.*", "\\1", fcs_names)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd$GROUP <- as.factor(tolower(samp_rd$GROUP))
+
+## once the dates are readable by R, they are not readable anymore by excel 
+## -> I import what I need from the old table
+
+samp_rd_old <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL.xlsx")
+samp_rd$DELAY_SAMPLE <- samp_rd_old$DELAY_SAMPLE
+
+colnames(samp_rd)[3] <- "Id.Cryostem.R"
+selec_couples <- samp_rd %>%
+  dplyr::filter(DELAY_SAMPLE >= 148) %>%
+  dplyr::filter(!COUPLENUMBER %in% c(32, 71, 50)) %>%
+  dplyr::select(COUPLENUMBER)
+
+samp_rd <- samp_rd[which(samp_rd$COUPLENUMBER %in% selec_couples$COUPLENUMBER),]
+rownames(samp_rd) <- samp_rd$Id.Cryostem.R
+rd_names <- fcs_names[samp_rd$Id.Cryostem.R]
+donor_names <- rd_names[grep("D", names(rd_names))]
+samp_donors <- samp_rd[names(donor_names),]
+```
+
+We can then isolate the donors profiles, ie, for every recipient, the percentage 
+of her/his cells that mapped to the different FlowSOM metaclusters:
+```{r, echo = FALSE}
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/pctgs_rd.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/fsom_rd.RData")
+pctgs_rd <- pctgs_rd[samp_rd$Id.Cryostem.R,]
+pctgs_meta_rd <- t(apply(pctgs_rd, 1, function(x){tapply(x, fsom_rd$metaclustering, sum)}))
+pctgs_donors <- pctgs_meta_rd[names(donor_names),]
+colnames(pctgs_donors) <- labels
+```
+
+We can visualise the donors FlowSOM profiles (the percentage of cells of the 
+patients that map to the different metaclusters) in a PCA or tSNE map, to see which 
+donors are most similar:
+
+PCA : 
+```{r, echo = FALSE}
+pca_donor_cryo <- prcomp(pctgs_donors)
+pca_2plot <- as.data.frame(pca_donor_cryo$x, stringsAsFactors = F) %>% 
+  select(PC1, PC2) %>% 
+  mutate(Id.Cryostem.R = rownames(pctgs_donors)) %>% 
+  left_join(samp_donors, by = "Id.Cryostem.R")
+```
+
+The first component of the PCA seems quite informative :
+```{r, echo = FALSE}
+plot(pca_donor_cryo)
+```
+
+All tolerance groups seem to be grouped together, with no real observable pattern
+```{r, echo = FALSE}
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(GROUP), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+## Functional markers:
+
+Extract the ratios of cells that are positive for the functional markers for the recipients only:
+```{r, echo = FALSE}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/funct_markers/ratios_funct_meta_rd.RData")
+patient_names <- gsub("^[0-9]*_([^_]*)_.*", "\\1", names(result))
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/test_stlouis_backbone/funct_mark_res_13_06.RData")
+funct_marker_tables <- lapply(tables_res, function(mat){
+  mat <- as.data.frame(t(mat) )
+})
+
+funct_big_table <- do.call(cbind, funct_marker_tables)
+rownames(funct_big_table) <- patient_names
+funct_donors <- funct_big_table[names(donor_names),]
+colnames(funct_donors) <- gsub(".[0-9]*$", "_", colnames(funct_donors))
+colnames(funct_donors) <- paste0(colnames(funct_donors), colnames(pctgs_donors))
+```
+
+## Phenotypic and functional markers
+
+Taking together information about the percentages in the FlowSOM metaclusters and the percentage of positive cells for the functional markers in these metaclusters:
+
+```{r, echo = FALSE}
+donors_pheno_funct <- merge(as.data.frame(pctgs_donors), as.data.frame(funct_donors), by = "row.names") %>%
+  column_to_rownames("Row.names")
+
+pca_donors <- prcomp(as.matrix(donors_pheno_funct))
+
+pca_2plot <- as.data.frame(pca_donors$x) %>% 
+  mutate(Id.Cryostem.R = rownames(pca_donors$x)) %>% 
+  left_join(samp_donors, by = "Id.Cryostem.R")
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(GROUP), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+There doesn't seem to be much batch effect in the Cryostem donors (as opposed to
+the St Louis donors). All the samples were processed after September 2017, which
+might explain why they are not affected.
+
+## Feature selection :
+
+### Identifying features that differ between tolerant and non tolerant donors:
+
+Run the permutation distribution, taking demographic variables into account:
+I first add the age and gender compatibility information to the data.
+```{r, echo = FALSE}
+donor_info <- couple_info_cryo %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(grepl("D", rownames(couple_info_cryo))) 
+
+norm_data <- pheno_funct %>% 
+  select(-group) %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  left_join(donor_info %>% select(Id.Cryostem.R, gender_comp, age_recip, GROUP),
+            by = "Id.Cryostem.R") %>% 
+  mutate(group = as.factor(GROUP)) %>% 
+  select(-GROUP) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+donor_path <- "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/log2/donors/"
+```
+
+```{r, echo = FALSE}
+# replace zeros by half of the smallest value, and then
+# log2 transform all CyTOF features:
+norm_data_orig <- norm_data
+nd <- norm_data %>% select(-group, -age_recip, -gender_comp)
+norm_data <- apply(nd, 2, function(x){
+  if(all(x>=0)==FALSE){
+    x[x<0] <- 0
+  }
+  smallest <- min(x[x>0])
+  x[x==0] <- smallest/2
+  log2(x)
+  }) %>% as.data.frame %>% 
+  rownames_to_column("rn") %>% 
+  mutate(group = norm_data_orig$group,
+         age_recip = norm_data_orig$age_recip,
+         gender_comp = norm_data_orig$gender_comp) %>% 
+  column_to_rownames("rn")
+```
+
+
+I then compute the permutation distribution for non vs tolerant donors.
+```{r, eval=FALSE, echo=FALSE}
+norm_data$group <- as.character(norm_data$group)
+norm_data$group[which(norm_data$group!="non_tolerant")] <- "tolerant"
+norm_data$group <- as.factor(norm_data$group)
+
+# Calculate the number of cores
+no_cores <- detectCores() - 1
+
+# Initiate cluster
+cl<-makeCluster(no_cores)
+ 
+clusterExport(cl, c("norm_data", "perm_val_LR_demo"))
+
+Sys.time()
+perm_vals <- parLapply(cl, seq_along(colnames(norm_data))[-which(colnames(norm_data) %in% c("group", "age_recip", "gender_comp"))], function(feat){
+  perm_val_LR_demo(data = norm_data, nb_perm = 1000, ind_feature = feat)
+})
+
+stopCluster(cl)
+Sys.time()
+
+saveRDS(perm_vals, file = paste0(donor_path, "perm_vals_TNT.RDS"))
+saveRDS(norm_data, file = paste0(donor_path, "norm_data_TNT.RDS"))
+```
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r, echo = FALSE}
+perm_vals <- readRDS(paste0(donor_path, "perm_vals_TNT.RDS"))
+norm_data <- readRDS(paste0(donor_path, "norm_data_TNT.RDS"))
+
+gr_medians <- norm_data %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+#### Threshold of 0.90
+
+Selected features for the recipients (with a threshold of 0.90), after 
+computing permutation distributions for every feature:
+```{r}
+selected_ft_donors_qt <- select_features(perm_vals = perm_vals,
+                                        norm_data = norm_data,
+                                        threshold = 0.90,
+                                        file_path = donor_path,
+                                        file_name = "perm_val_TNT_90_thresh.xlsx") 
+
+print(paste0(length(selected_ft_donors_qt),
+             " features were selected with a 0.90 threshold in the Cryostem cohort."))
+```
+
+We can then see which of these features are common to the St louis cohort:
+```{r, echo = FALSE}
+common_features <- find_common_features(
+  selected_features = selected_ft_donors_qt,
+  ndata = norm_data,
+  other_features_file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/log2/donors/perm_val_TNT_90_thresh.xlsx",
+  other_norm_data_file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/log2/donors/norm_data_TNT.RDS",
+  file_path = donor_path,
+  file_name = "pctgs_sel_ft_donors_TNT_90.RDS")
+```
+
+We can then visualise these common features in boxplots of the two cohorts:
+```{r, echo = FALSE}
+#pdf("cytof_TNT_donors_boxplots.pdf", height = 10, width = 14 )
+visualise_features_in_boxplots(common_features)
+#dev.off()
+```
+
+We can see how many of these features had the same behaviour in the two cohorts 
+(ie, were over or underexpressed in the same group of patients)
+```{r, echo = FALSE}
+common_beh_features <- find_common_behaviour_features(list_common_features = common_features,
+                                                      file_path = donor_path,
+                                                      common_ft_file_name = "perm_val_dir_TNT_90_thresh.xlsx",
+                                                      common_beh_file_name = "perm_val_beh_TNT_90_thresh.xlsx")
+common_beh_features
+
+```
+
+And compute the associated p-values:
+```{r, echo = FALSE}
+pvals <- lapply(common_features$common_features, function(i){
+  cryo_tmp <- common_features$local_df %>%
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+
+    louis_tmp <- common_features$other_df %>%
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+    
+    pval_louis <- wilcox.test(louis_tmp$Var[which(louis_tmp$group == "tolerant")],
+                louis_tmp$Var[which(louis_tmp$group == "non_tolerant")], exact = FALSE)$p.value
+    
+    pval_cryo <- wilcox.test(cryo_tmp$Var[which(cryo_tmp$group == "tolerant")],
+                cryo_tmp$Var[which(cryo_tmp$group == "non_tolerant")], exact = FALSE)$p.value
+    list(var = i, pval_louis = pval_louis, pval_cryo = pval_cryo)
+})
+
+bla <- do.call(rbind.data.frame, pvals)
+feature_pvalues <- bla[which(bla$var %in% common_beh_features),]
+write.xlsx(feature_pvalues, file = "~/Desktop/pvalues_cyto_donors_TNT.xlsx")    
+```
+
+### Identifying features that differ between primary and secondary tolerant donors:
+
+Run the permutation distribution, taking demographic variables into account:
+I first add the age and gender compatibility information to the data.
+```{r, echo = FALSE}
+donor_info <- couple_info_cryo %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(grepl("D", rownames(couple_info_cryo))) 
+
+norm_data <- pheno_funct %>% 
+  select(-group) %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  left_join(donor_info %>% select(Id.Cryostem.R, gender_comp, age_recip, GROUP),
+            by = "Id.Cryostem.R") %>% 
+  mutate(group = as.factor(GROUP)) %>% 
+  select(-GROUP) %>% 
+  column_to_rownames("Id.Cryostem.R")
+```
+
+```{r, echo = FALSE}
+# replace zeros by half of the smallest value, and then
+# log2 transform all CyTOF features:
+norm_data_orig <- norm_data
+nd <- norm_data %>% select(-group, -age_recip, -gender_comp)
+norm_data <- apply(nd, 2, function(x){
+  if(all(x>=0)==FALSE){
+    x[x<0] <- 0
+  }
+  smallest <- min(x[x>0])
+  x[x==0] <- smallest/2
+  log2(x)
+  }) %>% as.data.frame %>% 
+  rownames_to_column("rn") %>% 
+  mutate(group = norm_data_orig$group,
+         age_recip = norm_data_orig$age_recip,
+         gender_comp = norm_data_orig$gender_comp) %>% 
+  column_to_rownames("rn")
+```
+
+I then compute the permutation distribution for non vs tolerant recipients.
+```{r, eval=FALSE, echo=FALSE}
+norm_data <- norm_data %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(group != "non_tolerant") %>% 
+  mutate(group = as.factor(as.character(group))) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+# Calculate the number of cores
+no_cores <- detectCores() - 1
+
+# Initiate cluster
+cl<-makeCluster(no_cores)
+ 
+clusterExport(cl, c("norm_data", "perm_val_LR_demo"))
+
+Sys.time()
+perm_vals <- parLapply(cl, seq_along(colnames(norm_data))[-which(colnames(norm_data) %in% c("group", "age_recip", "gender_comp"))], function(feat){
+  perm_val_LR_demo(data = norm_data, nb_perm = 1000, ind_feature = feat)
+})
+
+stopCluster(cl)
+Sys.time()
+
+saveRDS(perm_vals, file = paste0(donor_path, "perm_vals_PTST.RDS"))
+saveRDS(norm_data, file = paste0(donor_path, "norm_data_PTST.RDS"))
+```
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r}
+perm_vals <- readRDS(paste0(donor_path, "perm_vals_PTST.RDS"))
+norm_data <- readRDS(paste0(donor_path, "norm_data_PTST.RDS"))
+
+gr_medians <- norm_data %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+#### Threshold of 0.90
+
+Selected features for the recipients (with a threshold of 0.90), after 
+computing permutation distributions for every feature:
+```{r, echo = FALSE}
+selected_ft_donors_qt <- select_features(perm_vals = perm_vals,
+                                        norm_data = norm_data,
+                                        threshold = 0.90,
+                                        file_path = donor_path,
+                                        file_name = "perm_val_PTST_90_thresh.xlsx") 
+
+print(paste0(length(selected_ft_donors_qt),
+             " features were selected with a 0.90 threshold in the Cryostem cohort."))
+```
+
+We can then see which of these features are common to the St louis cohort:
+```{r, echo = FALSE}
+common_features <- find_common_features(
+  selected_features = selected_ft_donors_qt,
+  ndata = norm_data,
+  other_features_file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/log2/donors/perm_val_PTST_90_thresh.xlsx",
+  other_norm_data_file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/log2/donors/norm_data_PTST.RDS",
+  file_path = donor_path,
+  file_name = "pctgs_sel_ft_donors_PTST_90.RDS")
+```
+
+We can then visualise these common features in boxplots of the two cohorts:
+```{r, echo = FALSE}
+#pdf("cytof_PTST_donors_boxplots.pdf", height = 10, width = 14 )
+visualise_features_in_boxplots(common_features, compar = "PTST")
+#dev.off()
+```
+
+We can see how many of these features had the same behaviour in the two cohorts 
+(ie, were over or underexpressed in the same group of patients)
+```{r, echo = FALSE}
+common_beh_features <- find_common_behaviour_features(list_common_features = common_features,
+                                                      file_path = donor_path,
+                                                      common_ft_file_name = "perm_val_dir_PTST_90_thresh.xlsx",
+                                                      common_beh_file_name = "perm_val_beh_PTST_90_thresh.xlsx")
+common_beh_features
+
+```
+
+And compute the associated p-values:
+```{r, echo = FALSE}
+pvals <- lapply(common_features$common_features, function(i){
+  cryo_tmp <- common_features$local_df %>%
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+
+    louis_tmp <- common_features$other_df %>%
+      dplyr::select(i, group) %>% magrittr::set_colnames(c("Var", "group"))
+    
+    pval_louis <- wilcox.test(louis_tmp$Var[which(louis_tmp$group == "primary_tolerant")],
+                louis_tmp$Var[which(louis_tmp$group == "secondary_tolerant")], exact = FALSE)$p.value
+    
+    pval_cryo <- wilcox.test(cryo_tmp$Var[which(cryo_tmp$group == "primary_tolerant")],
+                cryo_tmp$Var[which(cryo_tmp$group == "secondary_tolerant")], exact = FALSE)$p.value
+    list(var = i, pval_louis = pval_louis, pval_cryo = pval_cryo)
+})
+
+bla <- do.call(rbind.data.frame, pvals)
+feature_pvalues <- bla[which(bla$var %in% common_beh_features),]
+write.xlsx(feature_pvalues, file = "~/Desktop/pvalues_cyto_donors_PTST.xlsx")    
+```

@@ -1,0 +1,2396 @@
+---
+title: "Comparison of donors and recipients in the St Louis and the Cryostem cohorts"
+author: "Helena"
+date: "23/04/2020"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r imports, echo=FALSE, results='hide', warning = FALSE}
+suppressPackageStartupMessages({
+  library(openxlsx)
+  library(BioGVHD)
+  library(tidyverse)
+  library(ggplot2)
+  library(patchwork)
+  library(igraph)
+})
+options("scipen"=100)
+```
+
+# CyTOF data
+
+I can re-use the St Louis table, as it was generated in the markdown 
+"markdown_cytof_st_louis_12_12_19.Rmd. The table contained the couple values
+(i.e. donor - recipient per couple). It gives, for every couple, D-R values for 
+the percentage of cells in the 40 metaclusters, as well as the percentage of 
+cells that were positive for the different functional markers:
+```{r, echo = FALSE}
+mat_louis <- readRDS("../data/cyto/compar_donors_recipients/mat_pheno_funct_all_patients.RDS")
+```
+
+I also extract clinical information on these patients (the recipients age,
+gender compatibility, the CMV status of donors and recipients, ...)
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>%
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("Id.Cryostem.R")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  column_to_rownames("COUPLENUMBER")
+
+couple_info_louis <- couple_info[rownames(mat_louis),]
+
+head(couple_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+I also extract the table of CyTOF features in the Cryostem cohort, that contains
+the values of donors - recipients as generated in the markdown 
+"markdown_cytof_st_louis_12_12_19":
+```{r, echo = FALSE}
+mat_cryo <- readRDS("../data/cyto_national/compar_donors_recipients/mat_pheno_funct_all_patients.RDS")
+```
+
+And the clinical information for the Cryostem cohort:
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  dplyr::filter(!is.na(COUPLENUMBER)) %>% 
+  column_to_rownames("COUPLENUMBER")
+
+couple_info_cryo <- couple_info[rownames(mat_cryo),]
+
+head(couple_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+## Comparison of primary tolerant donors vs recipients
+
+I apply a wilcoxon test for each feature (D-R), to determine whether it is 
+significantly different from zero or not. A small p-value means that the D-R 
+values were significantly different from zero, and thus that the values of
+donors were significantly different from the values of the recipients.
+
+I first adjust the p-values in the Cryostem cohott, to take into account the 
+fact that we perform multiple tests, using the TSBH correction.
+
+I then extract the features that were significant in these patients, and I test
+this subset of features in teh st Louis cohort (the small number of patients in
+the St Louis cohort prevents us from directly testing all features, as the
+correction for multi testing is too strong for so many tests and so few patients.)
+```{r, echo = FALSE}
+pval_threshold <- 0.05
+
+colnames(mat_louis) <- gsub("X.Granzyme.B", "X.GranzymeB", colnames(mat_louis))
+colnames(mat_louis) <- gsub("X.LagT", "X.Lag3", colnames(mat_louis))
+
+mat_louis_tmp <- mat_louis %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  dplyr::select(-group) %>% 
+  column_to_rownames("rn")
+mat_cryo_tmp <- mat_cryo %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  dplyr::select(-group) %>% 
+  column_to_rownames("rn")
+
+# Test features in the Cryostem cohort:
+cryo_res <- plyr::ldply(seq_len(ncol(mat_cryo_tmp)), function(ft_idx){
+  tc <- wilcox.test(mat_cryo_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  mc <- median(mat_cryo_tmp[,ft_idx])
+  
+  data.frame("Feature" = colnames(mat_louis_tmp)[ft_idx], 
+             "pvalue" = tc, 
+             "median" = mc)
+})
+
+# pvalue adjustment
+multitest <- multtest::mt.rawp2adjp(as.numeric(cryo_res$pvalue),"TSBH")
+cryo_res$adj_pvalue <- multitest$adjp[order(multitest$index),2]
+
+selected_ft_cryo <- as.character(cryo_res$Feature[which(cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+
+# Test the retained variables in the St Louis cohort:
+louis_res <- plyr::ldply(seq_along(selected_ft_cryo), function(ft_idx){
+  ft_column <- which(colnames(mat_louis_tmp) == selected_ft_cryo[ft_idx])
+  tl <- wilcox.test(mat_louis_tmp[,ft_column], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  ml <- median(mat_louis_tmp[,ft_column])
+  
+  data.frame("Feature" = colnames(mat_louis_tmp)[ft_column], 
+             "pvalue" = tl, 
+             "median" = ml)
+})
+
+# pvalue adjustment
+multitest <- multtest::mt.rawp2adjp(as.numeric(louis_res$pvalue),"TSBH")
+louis_res$adj_pvalue <- multitest$adjp[order(multitest$index),2]
+
+selected_ft_louis <- as.character(louis_res$Feature[which(louis_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+
+
+all_in_recip <- data.frame(t(rep(0, 5))) %>% 
+magrittr::set_colnames(c("variable", "pvalue_St_Louis", "pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(ft_idx in seq_len(ncol(mat_louis_tmp))){
+  if(all(as.numeric(mat_louis_tmp[,ft_idx]) == 0)){
+    tl <- 1
+  } else{
+    tl <- wilcox.test(mat_louis_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  }
+  ml <- median(mat_louis_tmp[,ft_idx])
+  
+  tc <- wilcox.test(mat_cryo_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  mc <- median(mat_cryo_tmp[,ft_idx])
+  
+  all_in_recip <- rbind(all_in_recip, c(colnames(mat_louis_tmp)[ft_idx], tl, tc, ml, mc))
+}
+
+all_in_recip <- all_in_recip[-1,]
+
+#procs<-c("Bonferroni","Holm","Hochberg","SidakSS","SidakSD","BH","BY","ABH","TSBH")
+res2_l<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_St_Louis),"TSBH")
+res2_c<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_Cryostem),"TSBH")
+
+all_in <- all_in_recip %>% 
+  mutate(adj_pval_St_Louis = res2_l$adjp[order(res2_l$index),2],
+         adj_pval_Cryostem = res2_c$adjp[order(res2_c$index),2])
+
+print(paste0(length(which(all_in$adj_pval_Cryostem < pval_threshold)), 
+      " CyTOF features varied significantly between donors and recipients in the Cryostem cohort, with a pvalue threshold of ",
+      pval_threshold))
+
+print(paste0(length(which((all_in$adj_pval_Cryostem < pval_threshold)&(all_in$adj_pval_St_Louis < pval_threshold))), 
+      " CyTOF features varied significantly between donors and recipients in both cohorts, with a pvalue threshold of ",
+      pval_threshold))
+
+overexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+underexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(all_in)){
+  r <- all_in[i,]
+  if((r$adj_pval_Cryostem <= pval_threshold && r$pvalue_St_Louis <= pval_threshold) && (r$median_Louis > 0 && r$median_Cryo > 0)){
+    overexpr_in_donors <- rbind(overexpr_in_donors, 
+                                c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  } else if((r$adj_pval_Cryostem <= pval_threshold && r$pvalue_St_Louis <= pval_threshold) && (r$median_Louis < 0 && r$median_Cryo < 0)){
+    underexpr_in_donors <- rbind(underexpr_in_donors, 
+                                 c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  }
+}
+
+over <- overexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+over <- over[-1,]
+
+under <- underexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+under <- under[-1,]
+
+# old code:
+#resT_louis <- multtest::mt.maxT(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+#resP_louis <- mt.minP(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+```
+
+
+
+```{r, eval = FALSE}
+# setting the parameters: what you can expect in case of independent tests
+# in terms of FPs in one cohort and overlap.
+# caveat: the tests are not independent, but I would expect similar results
+
+ntests <- ncol(mat_louis_tmp)
+FP <- c(0.05,0.10,0.15,0.20)
+it <- 10000
+
+out.05.coh1 <- matrix(NA,ntests,it)
+out.05.coh2 <- matrix(NA,ntests,it)
+
+out.10.coh1 <- matrix(NA,ntests,it)
+out.10.coh2 <- matrix(NA,ntests,it)
+
+out.15.coh1 <- matrix(NA,ntests,it)
+out.15.coh2 <- matrix(NA,ntests,it)
+
+out.20.coh1 <- matrix(NA,ntests,it)
+out.20.coh2 <- matrix(NA,ntests,it)
+
+set.seed(123)
+for(i in (1:it)){
+  out.05.coh1[,i] <- rbinom(ntests,1,FP[1])
+  out.05.coh2[,i] <- rbinom(ntests,1,FP[1])
+  out.10.coh1[,i] <- rbinom(ntests,1,FP[2])
+  out.10.coh2[,i] <- rbinom(ntests,1,FP[2])
+  out.15.coh1[,i] <- rbinom(ntests,1,FP[3])
+  out.15.coh2[,i] <- rbinom(ntests,1,FP[3])
+  out.20.coh1[,i] <- rbinom(ntests,1,FP[4])
+  out.20.coh2[,i] <- rbinom(ntests,1,FP[4])
+}
+
+nFP.05.coh1 <- colSums(out.05.coh1)
+hist(nFP.05.coh1)
+nFP.05.coh2 <- colSums(out.05.coh2)
+hist(nFP.05.coh2)
+nFP.10.coh1 <- colSums(out.10.coh1)
+hist(nFP.10.coh1)
+nFP.10.coh2 <- colSums(out.10.coh2)
+hist(nFP.10.coh2)
+nFP.15.coh1 <- colSums(out.15.coh1)
+hist(nFP.15.coh1)
+nFP.15.coh2 <- colSums(out.15.coh2)
+hist(nFP.15.coh2)
+nFP.20.coh1 <- colSums(out.20.coh1)
+hist(nFP.20.coh1)
+nFP.20.coh2 <- colSums(out.20.coh2)
+hist(nFP.20.coh2)
+
+in.both.05 <- (out.05.coh1+out.05.coh2)>1
+overlap.nFP.05 <- colSums(in.both.05)
+hist(overlap.nFP.05)
+
+in.both.10 <- (out.10.coh1+out.10.coh2)>1
+overlap.nFP.10 <- colSums(in.both.10)
+hist(overlap.nFP.10)
+
+in.both.15 <- (out.15.coh1+out.15.coh2)>1
+overlap.nFP.15 <- colSums(in.both.15)
+hist(overlap.nFP.15)
+
+in.both.20 <- (out.20.coh1+out.20.coh2)>1
+overlap.nFP.20 <- colSums(in.both.20)
+hist(overlap.nFP.20)
+```
+
+```{r, eval = FALSE}
+###################
+# permutation test:
+###################
+
+# with the amount of uncorrected positive tests, what are the odds of overlap?
+ntests <- 7879
+pos.coh1 <- 1202
+pos.coh2 <- 3456
+coh1 <- rep(0,ntests)
+coh2 <- coh1
+coh1[1:pos.coh1] <-1
+sum(coh1)
+coh2[1:pos.coh2] <- 1
+sum(coh2)
+
+it <- 10000
+perm.coh1 <- matrix(NA,ntests,it)
+perm.coh2 <- matrix(NA,ntests,it)
+
+set.seed(123)
+for(i in (1:it)){
+  perm.coh1[,i] <- sample(coh1)
+  perm.coh2[,i] <- sample(coh2)
+}
+
+
+in.both <- (perm.coh1+perm.coh2)>1
+overlap <- colSums(in.both)
+hist(overlap)
+```
+
+
+
+It can happen that the behaviour of the features in donors 
+versus recipients are not matching in both cohorts (a D-R negative value in 
+a couple doesn't necessarily mean that the global mean value of donors was
+< the the mean value of recipients for this feature).
+
+Therefore, I apply a second filtering by computing the median in donors and
+recipients in each cohort and by checking that the features have the same 
+behaviour in the two cohorts:
+```{r, echo = FALSE}
+mat_DR_louis <- readRDS("../data/cyto/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  column_to_rownames("rn")
+mat_DR_cryo <- readRDS("../data/cyto_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  column_to_rownames("rn")
+
+over2 <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(over)){
+  tmp_l <- mat_DR_louis[over[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_louis)), "D", "R")) %>% 
+    group_by(type) %>% 
+    summarise_all(median)
+  
+  tmp_c <- mat_DR_cryo[over[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_cryo)), "D", "R")) %>% 
+    group_by(type) %>% 
+    summarise_all(median)
+  
+  if(tmp_l[1,2] >= tmp_l[2,2] && tmp_c[1,2] >= tmp_c[2,2]){
+    over2 <- rbind(over2, over[i,])
+  }
+}
+
+over2 <- over2[-1,]
+
+under2 <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(under)){
+  tmp_l <- mat_DR_louis[under[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_louis)), "D", "R")) %>% 
+    group_by(type) %>% 
+    summarise_all(median)
+  
+  tmp_c <- mat_DR_cryo[under[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_cryo)), "D", "R")) %>% 
+    group_by(type) %>% 
+    summarise_all(median)
+  
+  if(tmp_l[1,2] <= tmp_l[2,2] && tmp_c[1,2] <= tmp_c[2,2]){
+    under2 <- rbind(under2, under[i,])
+  }
+}
+
+under2 <- under2[-1,]
+
+print(paste0(nrow(over2), 
+             " variables were over-expressed in the donors compared to the recipients, and ", 
+             nrow(under2),
+             " variables were under-expressed in the donors compared to the recipients"))
+
+
+write.xlsx(over2, "../data/cyto/compar_donors_recipients/cytof_overexpressed_in_primary_donors.xlsx")
+write.xlsx(under2, "../data/cyto/compar_donors_recipients/cytof_underexpressed_in_primary_donors.xlsx")
+
+```
+
+
+
+We can see how these different variables were correlated:
+```{r, echo = FALSE}
+data_2use <- mat_louis_tmp[,c(over2$variable, under2$variable)] 
+colnames(mat_cryo) <- gsub("GranzymeB", "Granzyme.B", colnames(mat_cryo))
+#data_cryo <- mat_cryo_tmp[,c(overexpr_in_recip, underexp_in_recip)]
+saveRDS(mat_cryo, "../data/cyto_national/compar_donors_recipients/mat_for_corr_prim.RDS")
+
+plot_correlations2(ft_df = data_2use,
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/compar_donors_recipients/mat_for_corr_prim.RDS",
+                  node_color = c(rep("cadetblue1", nrow(over2)),
+                                 rep("darkgoldenrod1", nrow(under2))),
+                  pval_threshold = 0.01)
+
+```
+
+And save the tables of D-R values for the genes that were selected, in both
+cohorts:
+```{r, echo = FALSE}
+write.xlsx(data_2use, "../data/cyto/compar_donors_recipients/primary_sel.xlsx", row.names = TRUE)
+direction <- c(rep("cadetblue1", nrow(over2)),
+               rep("darkgoldenrod1", nrow(under2)))
+saveRDS(direction, "../data/cyto/compar_donors_recipients/direction_features_primary_sel.RDS")
+
+
+data_cryo <- mat_cryo %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  select(c(colnames(data_2use), "rn")) %>% 
+  column_to_rownames("rn")
+
+write.xlsx(data_cryo, "../data/cyto_national/compar_donors_recipients/primary_sel.xlsx", row.names = TRUE)
+```
+
+
+### PCA 
+
+We can use the features that we just extracted as significantly differentially
+expressed in the primary tolerant donors and recipients to build a PCA:
+```{r, echo = FALSE}
+mat_DR_louis <- readRDS("../data/cyto/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+```
+
+```{r, echo = FALSE}
+mat_2use <- mat_DR_louis %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  dplyr::select(c(over2$variable, under2$variable, "rn")) %>% 
+  mutate(patient_type = ifelse(grepl("R", rn), "R", "D"))
+
+mat_pca <- mat_2use %>% 
+  dplyr::select(-patient_type) %>% 
+  column_to_rownames("rn")
+mat_pca <- apply(mat_pca, 2, scale)
+
+pca_l <- prcomp(mat_pca)
+plot(pca_l)
+```
+
+The features that we selected allow us to separate nicely the donors from 
+the recipients along the first principal component:
+```{r, echo = FALSE}
+mat4pca <- mat_2use %>% 
+  mutate(PC1 = pca_l$x[,1],
+         PC2 = pca_l$x[,2])
+
+ggplot(mat4pca, aes(x = PC1, y = PC2, col = patient_type), label = rn) +
+  geom_point() +
+  geom_text(aes(label=rn),hjust=0, vjust=0) +
+  scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+```
+
+We can map the Cryostem primary tolerant patients on this same PCA:
+```{r, echo = FALSE}
+mat_DR_cryo <- readRDS("../data/cyto_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+
+mat_2use_cryo <- mat_DR_cryo %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  magrittr::set_colnames(gsub("GranzymeB", "Granzyme.B", colnames(.))) %>% 
+  dplyr::select(c(over2$variable, under2$variable, "rn")) %>% 
+  mutate(patient_type = ifelse(grepl("R", rn), "R", "D"))
+
+mat_pca <- mat_2use_cryo %>% 
+  dplyr::select(-patient_type) %>% 
+  column_to_rownames("rn")
+mat_pca <- apply(mat_pca, 2, scale)
+
+new_coords <- scale(mat_pca, pca_l$center, pca_l$scale) %*% pca_l$rotation 
+
+mat4pca_cryo <- mat_2use_cryo %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2])
+
+all_2plot <- rbind(mat4pca %>% 
+                     mutate(cohort = rep("St_Louis", nrow(mat4pca))),
+                   mat4pca_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(mat4pca_cryo))))
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= patient_type, label = rn)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=rn),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("cadetblue3", "darkgoldenrod1")) +
+  ggtitle("Separation of primary tolerant donors vs recipients")
+```
+
+Boxplot of these features:
+```{r, eval = FALSE, echo = FALSE}
+# pdf("outputs/plots/cyto/compar_donors_and_recipients/boxplots_primary.pdf",
+#     height = 10, width = 14)
+for(i in c(over2$variable, under2$variable)){
+  louis_tmp <- mat4pca %>%
+    dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat4pca)/2), 1:(nrow(mat4pca)/2)))
+  cryo_tmp <- mat4pca_cryo %>%
+      dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat4pca_cryo)/2), 1:(nrow(mat4pca_cryo)/2)))
+  
+  ymin <- min(c(cryo_tmp$Var, louis_tmp$Var))
+  ymax <- max(c(cryo_tmp$Var, louis_tmp$Var))
+  
+  p1 <- ggplot(louis_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+    geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+    geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+    coord_cartesian(ylim = c(ymin, ymax)) +
+    ggtitle(paste0(i," in St Louis"))+
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+  
+  p2 <- ggplot(cryo_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+    geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+    geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+    coord_cartesian(ylim = c(ymin, ymax)) +
+    ggtitle(paste0(i," in Cryostem"))+
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+  gmix <- patchwork::wrap_plots(p1, p2)
+  print(gmix)
+}
+# dev.off()
+
+```
+
+And compute the associated p-values:
+```{r, echo = FALSE}
+pvals <- lapply(c(over2$variable, under2$variable), function(i){
+ louis_tmp <- mat4pca %>%
+    dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat4pca)/2), 1:(nrow(mat4pca)/2)))
+  cryo_tmp <- mat4pca_cryo %>%
+      dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat4pca_cryo)/2), 1:(nrow(mat4pca_cryo)/2)))
+    
+  pval_louis <- wilcox.test(louis_tmp$Var[which(louis_tmp$group == "D")],
+                            louis_tmp$Var[which(louis_tmp$group == "R")], 
+                            paired = TRUE, exact = FALSE)$p.value
+    
+  pval_cryo <- wilcox.test(cryo_tmp$Var[which(cryo_tmp$group == "D")],
+                           cryo_tmp$Var[which(cryo_tmp$group == "R")], 
+                           paired = TRUE, exact = FALSE)$p.value
+  list(var = i, pval_louis = pval_louis, pval_cryo = pval_cryo)
+})
+
+bla <- do.call(rbind.data.frame, pvals)
+write.xlsx(bla, file = "~/Desktop/pvalues_cyto_DR_PT.xlsx")    
+```
+
+Write St Louis and Cryostem tables in excel files:
+```{r, echo = FALSE}
+matl <- mat_2use %>% 
+  column_to_rownames("rn")
+
+matc <- mat_2use_cryo %>% 
+  column_to_rownames("rn")
+
+write.xlsx(matl, "../data/cyto/compar_donors_recipients/mat_DR_primary_St_Louis.xlsx", row.names = TRUE)
+write.xlsx(matc, "../data/cyto_national/compar_donors_recipients/mat_DR_primary_Cryostem.xlsx", row.names = TRUE)
+```
+
+
+## Comparison of secondary tolerant donors vs recipients
+
+```{r, echo = FALSE}
+pval_threshold <- 0.05
+
+colnames(mat_cryo) <- gsub("X.Granzyme.B", "X.GranzymeB", colnames(mat_cryo))
+
+mat_louis_tmp <- mat_louis %>% 
+  dplyr::filter(group == "secondary_tolerant") %>% 
+  dplyr::select(-group)
+mat_cryo_tmp <- mat_cryo %>% 
+  dplyr::filter(group == "secondary_tolerant") %>% 
+  dplyr::select(-group)
+
+# Test features in the Cryostem cohort:
+cryo_res <- plyr::ldply(seq_len(ncol(mat_cryo_tmp)), function(ft_idx){
+  tc <- wilcox.test(mat_cryo_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  mc <- median(mat_cryo_tmp[,ft_idx])
+  
+  data.frame("Feature" = colnames(mat_louis_tmp)[ft_idx], 
+             "pvalue" = tc, 
+             "median" = mc)
+})
+
+# pvalue adjustment
+multitest <- multtest::mt.rawp2adjp(as.numeric(cryo_res$pvalue),"TSBH")
+cryo_res$adj_pvalue <- multitest$adjp[order(multitest$index),2]
+
+selected_ft_cryo <- as.character(cryo_res$Feature[which(cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+
+# Test the retained variables in the St Louis cohort:
+louis_res <- plyr::ldply(seq_along(selected_ft_cryo), function(ft_idx){
+  ft_column <- which(colnames(mat_louis_tmp) == selected_ft_cryo[ft_idx])
+  tl <- wilcox.test(mat_louis_tmp[,ft_column], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  ml <- median(mat_louis_tmp[,ft_column])
+  
+  data.frame("Feature" = colnames(mat_louis_tmp)[ft_column], 
+             "pvalue" = tl, 
+             "median" = ml)
+})
+
+# pvalue adjustment
+multitest <- multtest::mt.rawp2adjp(as.numeric(louis_res$pvalue),"TSBH")
+louis_res$adj_pvalue <- multitest$adjp[order(multitest$index),2]
+
+selected_ft_louis <- as.character(louis_res$Feature[which(louis_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+```
+
+
+## Comparison of non-tolerant donors vs recipients
+
+```{r, echo = FALSE}
+pval_threshold <- 0.05
+
+colnames(mat_cryo) <- gsub("X.Granzyme.B", "X.GranzymeB", colnames(mat_cryo))
+
+mat_louis_tmp <- mat_louis %>% 
+  dplyr::filter(group == "non_tolerant") %>% 
+  dplyr::select(-group)
+mat_cryo_tmp <- mat_cryo %>% 
+  dplyr::filter(group == "non_tolerant") %>% 
+  dplyr::select(-group)
+
+# Test features in the Cryostem cohort:
+cryo_res <- plyr::ldply(seq_len(ncol(mat_cryo_tmp)), function(ft_idx){
+  tc <- wilcox.test(mat_cryo_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  mc <- median(mat_cryo_tmp[,ft_idx])
+  
+  data.frame("variable" = colnames(mat_louis_tmp)[ft_idx], 
+             "pvalue" = tc, 
+             "median" = mc)
+})
+
+# pvalue adjustment
+multitest <- multtest::mt.rawp2adjp(as.numeric(cryo_res$pvalue),"TSBH")
+cryo_res$adj_pvalue <- multitest$adjp[order(multitest$index),2]
+
+selected_ft_cryo <- as.character(cryo_res$variable[which(cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+
+# Test the retained variables in the St Louis cohort:
+louis_res <- plyr::ldply(seq_along(selected_ft_cryo), function(ft_idx){
+  ft_column <- which(colnames(mat_louis_tmp) == selected_ft_cryo[ft_idx])
+  tl <- wilcox.test(mat_louis_tmp[,ft_column], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  ml <- median(mat_louis_tmp[,ft_column])
+  
+  data.frame("variable" = colnames(mat_louis_tmp)[ft_column], 
+             "pvalue" = tl, 
+             "median" = ml)
+})
+
+# pvalue adjustment
+multitest <- multtest::mt.rawp2adjp(as.numeric(louis_res$pvalue),"TSBH")
+louis_res$adj_pvalue <- multitest$adjp[order(multitest$index),2]
+
+selected_ft_louis <- as.character(louis_res$variable[which(louis_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+# select only features with median of the same sign in both cohorts
+cryo_res_selected_ft <- cryo_res[which(cryo_res$variable %in% selected_ft_louis),] 
+rownames(cryo_res_selected_ft) <- cryo_res_selected_ft$variable
+
+louis_res_selected_ft <- louis_res[which(louis_res$variable %in% selected_ft_louis),] 
+rownames(louis_res_selected_ft) <- louis_res_selected_ft$variable
+louis_res_selected_ft <- louis_res_selected_ft[rownames(cryo_res_selected_ft),]
+
+passing_features <- lapply(rownames(louis_res_selected_ft), function(feat){
+  tmp_val_louis <- louis_res_selected_ft[feat,]
+  tmp_val_cryo <- cryo_res_selected_ft[feat,]
+  value <- ifelse(sign(tmp_val_louis$median) == sign(tmp_val_cryo$median), feat, NA)
+  value
+})
+
+over <- louis_res_selected_ft %>% 
+  filter(variable %in% unlist(passing_features)) %>% 
+  filter(sign(median)==1) 
+
+under <- louis_res_selected_ft %>% 
+  filter(variable %in% unlist(passing_features)) %>% 
+  filter(sign(median)==-1) 
+  
+
+```
+
+
+### PCA 
+
+We can use the features that we just extracted as significantly differentially
+expressed in the primary tolerant donors and recipients to build a PCA:
+
+```{r, echo = FALSE}
+mat_DR_louis <- readRDS("../data/cyto/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "non_tolerant") %>% 
+  column_to_rownames("rn")
+
+colnames(mat_DR_louis) <- gsub("X.Granzyme.B", "X.GranzymeB", colnames(mat_DR_louis))
+colnames(mat_DR_louis) <- gsub("X.LagT", "X.Lag3", colnames(mat_DR_louis))
+
+mat_DR_cryo <- readRDS("../data/cyto_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "non_tolerant") %>% 
+  column_to_rownames("rn")
+
+mat_2use <- mat_DR_louis %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "non_tolerant") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  dplyr::select(c(over$variable, under$variable, "rn")) %>% 
+  mutate(patient_type = ifelse(grepl("R", rn), "R", "D"))
+
+mat_pca <- mat_2use %>% 
+  dplyr::select(-patient_type) %>% 
+  column_to_rownames("rn")
+mat_pca <- apply(mat_pca, 2, scale)
+
+pca_l <- prcomp(mat_pca)
+plot(pca_l)
+```
+
+The features that we selected allow us to separate nicely the donors from 
+the recipients along the first principal component:
+```{r, echo = FALSE}
+mat4pca <- mat_2use %>% 
+  mutate(PC1 = pca_l$x[,1],
+         PC2 = pca_l$x[,2])
+
+ggplot(mat4pca, aes(x = PC1, y = PC2, col = patient_type), label = rn) +
+  geom_point() +
+  geom_text(aes(label=rn),hjust=0, vjust=0) +
+  scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+```
+
+We can map the Cryostem primary tolerant patients on this same PCA:
+```{r, echo = FALSE}
+mat_DR_cryo <- readRDS("../data/cyto_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+
+mat_2use_cryo <- mat_DR_cryo %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "non_tolerant") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  #magrittr::set_colnames(gsub("GranzymeB", "Granzyme.B", colnames(.))) %>% 
+  dplyr::select(c(over$variable, under$variable, "rn")) %>% 
+  mutate(patient_type = ifelse(grepl("R", rn), "R", "D"))
+
+mat_pca <- mat_2use_cryo %>% 
+  dplyr::select(-patient_type) %>% 
+  column_to_rownames("rn")
+mat_pca <- apply(mat_pca, 2, scale)
+
+new_coords <- scale(mat_pca, pca_l$center, pca_l$scale) %*% pca_l$rotation 
+
+mat4pca_cryo <- mat_2use_cryo %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2])
+
+all_2plot <- rbind(mat4pca %>% 
+                     mutate(cohort = rep("St_Louis", nrow(mat4pca))),
+                   mat4pca_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(mat4pca_cryo))))
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= patient_type, label = rn)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=rn),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("cadetblue3", "darkgoldenrod1")) +
+  ggtitle("Separation of non tolerant donors vs recipients")
+```
+
+Boxplot of these features:
+```{r, eval = FALSE, echo = FALSE}
+# pdf("outputs/plots/cyto/compar_donors_and_recipients/boxplots_primary.pdf",
+#     height = 10, width = 14)
+for(i in c(over2$variable, under2$variable)){
+  louis_tmp <- mat4pca %>%
+    dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat4pca)/2), 1:(nrow(mat4pca)/2)))
+  cryo_tmp <- mat4pca_cryo %>%
+      dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat4pca_cryo)/2), 1:(nrow(mat4pca_cryo)/2)))
+  
+  ymin <- min(c(cryo_tmp$Var, louis_tmp$Var))
+  ymax <- max(c(cryo_tmp$Var, louis_tmp$Var))
+  
+  p1 <- ggplot(louis_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+    geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+    geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+    coord_cartesian(ylim = c(ymin, ymax)) +
+    ggtitle(paste0(i," in St Louis"))+
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+  
+  p2 <- ggplot(cryo_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+    geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+    geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+    coord_cartesian(ylim = c(ymin, ymax)) +
+    ggtitle(paste0(i," in Cryostem"))+
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+  gmix <- patchwork::wrap_plots(p1, p2)
+  print(gmix)
+}
+# dev.off()
+
+```
+
+# Metabolomics data
+
+I can re-use the St Louis table that contained, for every patient, the amount
+of every metabolite:
+```{r, echo = FALSE}
+mat_louis <- readRDS("../data/metabo/compar_donors_recipients/mat_all_patients.RDS")
+```
+
+I also extract clinical information on these patients (the recipients age,
+gender compatibility, the CMV status of donors and recipients, ...)
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>%
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("Id.Cryostem.R")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  column_to_rownames("COUPLENUMBER")
+
+rownames(mat_louis) <- gsub("couple_", "", rownames(mat_louis))
+
+couple_info_louis <- couple_info[rownames(mat_louis),]
+
+head(couple_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+I also extract the table of CyTOF features in teh Cryostem cohort:
+```{r, echo = FALSE}
+mat_cryo <- readRDS("../data/metabo_national/compar_donors_recipients/mat_all_patients.RDS")
+```
+
+And the clinical information for the Cryostem cohort:
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  dplyr::filter(!is.na(COUPLENUMBER)) %>% 
+  column_to_rownames("COUPLENUMBER")
+
+rownames(mat_cryo) <- gsub("couple_", "", rownames(mat_cryo))
+
+couple_info_cryo <- couple_info[rownames(mat_cryo),]
+
+head(couple_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+## Comparison of primary tolerant donors vs recipients
+
+```{r, echo = FALSE}
+pval_threshold <- 0.05
+
+common_colnames <- colnames(mat_louis)[which(colnames(mat_louis) %in% colnames(mat_cryo))]
+
+mat_louis_tmp <- mat_louis %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  dplyr::select(common_colnames) %>% 
+  dplyr::select(-group)
+mat_cryo_tmp <- mat_cryo %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  dplyr::select(common_colnames) %>% 
+  dplyr::select(-group)
+
+#resT_louis <- multtest::mt.maxT(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+#resP_louis <- mt.minP(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+
+all_in_recip <- data.frame(t(rep(0, 5))) %>% 
+magrittr::set_colnames(c("variable", "pvalue_St_Louis", "pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(ft_idx in seq_len(ncol(mat_louis_tmp))){
+  if(all(as.numeric(mat_louis_tmp[,ft_idx]) == 0)){
+    tl <- 1
+  } else{
+    tl <- wilcox.test(mat_louis_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  }
+  ml <- median(mat_louis_tmp[,ft_idx])
+  
+  tc <- wilcox.test(mat_cryo_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  mc <- median(mat_cryo_tmp[,ft_idx])
+  
+  all_in_recip <- rbind(all_in_recip, c(colnames(mat_louis_tmp)[ft_idx], tl, tc, ml, mc))
+}
+
+all_in_recip <- all_in_recip[-1,]
+
+#procs<-c("Bonferroni","Holm","Hochberg","SidakSS","SidakSD","BH","BY","ABH","TSBH")
+res2_l<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_St_Louis),"TSBH")
+res2_c<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_Cryostem),"TSBH")
+
+all_in <- all_in_recip %>% 
+  mutate(adj_pval_St_Louis = res2_l$adjp[order(res2_l$index),2],
+         adj_pval_Cryostem = res2_c$adjp[order(res2_c$index),2])
+
+print(paste0(length(which(all_in$adj_pval_Cryostem < pval_threshold)), 
+      " metabolites varied significantly between donors and recipients in the Cryostem cohort, with a pvalue threshold of ",
+      pval_threshold))
+
+overexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+underexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(all_in)){
+  r <- all_in[i,]
+  if((r$adj_pval_Cryostem <= pval_threshold && r$pvalue_St_Louis <= pval_threshold) && (r$median_Louis > 0 && r$median_Cryo > 0)){
+    overexpr_in_donors <- rbind(overexpr_in_donors, 
+                                c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  } else if((r$adj_pval_Cryostem <= pval_threshold && r$pvalue_St_Louis <= pval_threshold) && (r$median_Louis < 0 && r$median_Cryo < 0)){
+    underexpr_in_donors <- rbind(underexpr_in_donors, 
+                                 c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  }
+}
+
+over <- overexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+over <- over[-1,]
+
+under <- underexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+under <- under[-1,]
+
+
+# write.xlsx(over, "../data/metabo/compar_donors_recipients/cytof_overexpressed_in_primary_donors.xlsx")
+# write.xlsx(under, "../data/metabo/compar_donors_recipients/cytof_underexpressed_in_primary_donors.xlsx")
+```
+
+
+## Comparison of secondary tolerant donors vs recipients
+
+```{r, echo = FALSE}
+pval_threshold <- 0.05
+
+common_colnames <- colnames(mat_louis)[which(colnames(mat_louis) %in% colnames(mat_cryo))]
+
+mat_louis_tmp <- mat_louis %>% 
+  dplyr::filter(group == "secondary_tolerant") %>% 
+  dplyr::select(common_colnames) %>% 
+  dplyr::select(-group)
+mat_cryo_tmp <- mat_cryo %>% 
+  dplyr::filter(group == "secondary_tolerant") %>% 
+  dplyr::select(common_colnames) %>% 
+  dplyr::select(-group)
+
+#resT_louis <- multtest::mt.maxT(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+#resP_louis <- mt.minP(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+
+all_in_recip <- data.frame(t(rep(0, 5))) %>% 
+magrittr::set_colnames(c("variable", "pvalue_St_Louis", "pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(ft_idx in seq_len(ncol(mat_louis_tmp))){
+  if(all(as.numeric(mat_louis_tmp[,ft_idx]) == 0)){
+    tl <- 1
+  } else{
+    tl <- wilcox.test(mat_louis_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  }
+  ml <- median(mat_louis_tmp[,ft_idx])
+  
+  tc <- wilcox.test(mat_cryo_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  mc <- median(mat_cryo_tmp[,ft_idx])
+  
+  all_in_recip <- rbind(all_in_recip, c(colnames(mat_louis_tmp)[ft_idx], tl, tc, ml, mc))
+}
+
+all_in_recip <- all_in_recip[-1,]
+
+#procs<-c("Bonferroni","Holm","Hochberg","SidakSS","SidakSD","BH","BY","ABH","TSBH")
+res2_l<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_St_Louis),"TSBH")
+res2_c<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_Cryostem),"TSBH")
+
+all_in <- all_in_recip %>% 
+  mutate(adj_pval_St_Louis = res2_l$adjp[order(res2_l$index),2],
+         adj_pval_Cryostem = res2_c$adjp[order(res2_c$index),2])
+
+print(paste0(length(which(all_in$adj_pval_Cryostem < pval_threshold)), 
+      " metabolites varied significantly between donors and recipients in the two cohorts, with a pvalue threshold of ",
+      pval_threshold))
+
+overexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+underexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(all_in)){
+  r <- all_in[i,]
+  if((r$adj_pval_Cryostem <= pval_threshold && r$pvalue_St_Louis <= pval_threshold) && (r$median_Louis > 0 && r$median_Cryo > 0)){
+    overexpr_in_donors <- rbind(overexpr_in_donors, 
+                                c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  } else if((r$adj_pval_Cryostem <= pval_threshold && r$pvalue_St_Louis <= pval_threshold) && (r$median_Louis < 0 && r$median_Cryo < 0)){
+    underexpr_in_donors <- rbind(underexpr_in_donors, 
+                                 c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  }
+}
+
+over <- overexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+over <- over[-1,]
+
+under <- underexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+under <- under[-1,]
+
+
+# write.xlsx(over, "../data/metabo/compar_donors_recipients/cytof_overexpressed_in_secondary_donors.xlsx")
+# write.xlsx(under, "../data/metabo/compar_donors_recipients/cytof_underexpressed_in_secondary_donors.xlsx")
+```
+
+## Comparison of non tolerant donors vs recipients
+
+```{r, echo = FALSE}
+pval_threshold <- 0.05
+
+common_colnames <- colnames(mat_louis)[which(colnames(mat_louis) %in% colnames(mat_cryo))]
+
+mat_louis_tmp <- mat_louis %>% 
+  dplyr::filter(group == "non_tolerant") %>% 
+  dplyr::select(common_colnames) %>% 
+  dplyr::select(-group)
+mat_cryo_tmp <- mat_cryo %>% 
+  dplyr::filter(group == "non_tolerant") %>% 
+  dplyr::select(common_colnames) %>% 
+  dplyr::select(-group)
+
+#resT_louis <- multtest::mt.maxT(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+#resP_louis <- mt.minP(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+
+all_in_recip <- data.frame(t(rep(0, 5))) %>% 
+magrittr::set_colnames(c("variable", "pvalue_St_Louis", "pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(ft_idx in seq_len(ncol(mat_louis_tmp))){
+  if(all(as.numeric(mat_louis_tmp[,ft_idx]) == 0)){
+    tl <- 1
+  } else{
+    tl <- wilcox.test(mat_louis_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  }
+  ml <- median(mat_louis_tmp[,ft_idx])
+  
+  tc <- wilcox.test(mat_cryo_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  mc <- median(mat_cryo_tmp[,ft_idx])
+  
+  all_in_recip <- rbind(all_in_recip, c(colnames(mat_louis_tmp)[ft_idx], tl, tc, ml, mc))
+}
+
+all_in_recip <- all_in_recip[-1,]
+
+#procs<-c("Bonferroni","Holm","Hochberg","SidakSS","SidakSD","BH","BY","ABH","TSBH")
+res2_l<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_St_Louis),"TSBH")
+res2_c<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_Cryostem),"TSBH")
+
+all_in <- all_in_recip %>% 
+  mutate(adj_pval_St_Louis = res2_l$adjp[order(res2_l$index),2],
+         adj_pval_Cryostem = res2_c$adjp[order(res2_c$index),2])
+
+print(paste0(length(which(all_in$adj_pval_Cryostem < pval_threshold)), 
+      " metabolites varied significantly between donors and recipients in the two cohorts, with a pvalue threshold of ",
+      pval_threshold))
+
+overexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+underexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(all_in)){
+  r <- all_in[i,]
+  if((r$adj_pval_Cryostem <= pval_threshold && r$pvalue_St_Louis <= pval_threshold) && (r$median_Louis > 0 && r$median_Cryo > 0)){
+    overexpr_in_donors <- rbind(overexpr_in_donors, 
+                                c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  } else if((r$adj_pval_Cryostem <= pval_threshold && r$pvalue_St_Louis <= pval_threshold) && (r$median_Louis < 0 && r$median_Cryo < 0)){
+    underexpr_in_donors <- rbind(underexpr_in_donors, 
+                                 c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  }
+}
+
+over <- overexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+over <- over[-1,]
+
+under <- underexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+under <- under[-1,]
+
+
+# write.xlsx(over, "../data/metabo/compar_donors_recipients/cytof_overexpressed_in_secondary_donors.xlsx")
+# write.xlsx(under, "../data/metabo/compar_donors_recipients/cytof_underexpressed_in_secondary_donors.xlsx")
+```
+
+# Transcriptomics data
+
+I can re-use the St Louis table that contained, for every patient, the amount
+of every gene:
+```{r, echo = FALSE}
+mat_louis <- readRDS("../data/RNAseq/compar_donors_recipients/mat_all_patients.RDS")
+```
+
+I also extract clinical information on these patients (the recipients age,
+gender compatibility, the CMV status of donors and recipients, ...)
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>%
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("Id.Cryostem.R")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  column_to_rownames("COUPLENUMBER")
+
+rownames(mat_louis) <- gsub("couple_", "", rownames(mat_louis))
+
+couple_info_louis <- couple_info[rownames(mat_louis),]
+
+head(couple_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+I also extract the table of CyTOF features in teh Cryostem cohort:
+```{r, echo = FALSE}
+mat_cryo <- readRDS("../data/RNA_seq_national/compar_donors_recipients/mat_all_patients.RDS")
+```
+
+And the clinical information for the Cryostem cohort:
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  dplyr::filter(!is.na(COUPLENUMBER)) %>% 
+  column_to_rownames("COUPLENUMBER")
+
+rownames(mat_cryo) <- gsub("couple_", "", rownames(mat_cryo))
+
+couple_info_cryo <- couple_info[rownames(mat_cryo),]
+
+head(couple_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+## Comparison of primary tolerant donors vs recipients
+
+We only have seven primary tolerant recipients in the St Louis cohort, on
+which we are testing 7879 genes. Thus, in the St Louis cohort, some pvalues 
+are significantly < 0.05, but the ADJUSTED pvalues are all > 0.05.
+```{r, echo = FALSE}
+pval_threshold <- 0.05
+
+common_colnames <- colnames(mat_louis)[which(colnames(mat_louis) %in% colnames(mat_cryo))]
+
+mat_louis_tmp <- mat_louis %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  dplyr::select(c(common_colnames, "rn")) %>% 
+  dplyr::select(-group) %>% 
+  column_to_rownames("rn")
+mat_cryo_tmp <- mat_cryo %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  dplyr::select(c(common_colnames, "rn")) %>% 
+  dplyr::select(-group) %>% 
+  column_to_rownames("rn")
+
+#resT_louis <- multtest::mt.maxT(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+#resP_louis <- mt.minP(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+
+all_in_recip <- data.frame(t(rep(0, 5))) %>% 
+magrittr::set_colnames(c("variable", "pvalue_St_Louis", "pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(ft_idx in seq_len(ncol(mat_louis_tmp))){
+  if(all(as.numeric(mat_louis_tmp[,ft_idx]) == 0)){
+    tl <- 1
+  } else{
+    tl <- wilcox.test(mat_louis_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  }
+  ml <- median(mat_louis_tmp[,ft_idx])
+  
+  tc <- wilcox.test(mat_cryo_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  mc <- median(mat_cryo_tmp[,ft_idx])
+  
+  all_in_recip <- rbind(all_in_recip, c(colnames(mat_louis_tmp)[ft_idx], tl, tc, ml, mc))
+}
+
+all_in_recip <- all_in_recip[-1,]
+
+#procs<-c("Bonferroni","Holm","Hochberg","SidakSS","SidakSD","BH","BY","ABH","TSBH")
+res2_l<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_St_Louis),"TSBH")
+res2_c<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_Cryostem),"TSBH")
+
+all_in <- all_in_recip %>% 
+  mutate(adj_pval_St_Louis = res2_l$adjp[order(res2_l$index),2],
+         adj_pval_Cryostem = res2_c$adjp[order(res2_c$index),2])
+
+print(paste0(length(which((all_in$adj_pval_Cryostem < pval_threshold)&(all_in$adj_pval_St_Louis < pval_threshold))), 
+      " genes varied significantly between donors and recipients in the two cohorts, with an adjusted pvalue threshold of ",
+      pval_threshold))
+
+print(paste0(length(which((as.numeric(all_in$pvalue_Cryostem) < pval_threshold)&(as.numeric(all_in$pvalue_St_Louis) < pval_threshold))), 
+      " genes varied significantly between donors and recipients in the two cohorts, with a pvalue threshold of ",
+      pval_threshold))
+
+overexpr_in_donors <- data.frame(t(rep(0, 7))) %>% 
+  magrittr::set_colnames(c("variable", "pvalue_St_Louis", "pvalue_Cryostem", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+underexpr_in_donors <- data.frame(t(rep(0, 7))) %>% 
+  magrittr::set_colnames(c("variable", "pvalue_St_Louis", "pvalue_Cryostem", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(all_in)){
+  r <- all_in[i,]
+  if((r$adj_pval_Cryostem <= pval_threshold && as.numeric(r$pvalue_St_Louis) <= pval_threshold) && (r$median_Louis > 0 && r$median_Cryo > 0)){
+    overexpr_in_donors <- rbind(overexpr_in_donors, 
+                                c(colnames(mat_louis_tmp)[i], r$pvalue_St_Louis, r$pvalue_Cryostem,
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  } else if((r$adj_pval_Cryostem <= pval_threshold && as.numeric(r$pvalue_St_Louis) <= pval_threshold) && (r$median_Louis < 0 && r$median_Cryo < 0)){
+    underexpr_in_donors <- rbind(underexpr_in_donors, 
+                                 c(colnames(mat_louis_tmp)[i], r$pvalue_St_Louis, r$pvalue_Cryostem,
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  }
+}
+
+over <- overexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+over <- over[-1,]
+
+under <- underexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+under <- under[-1,]
+
+
+# write.xlsx(over, "../data/RNAseq/compar_donors_recipients/cytof_overexpressed_in_primary_donors.xlsx")
+# write.xlsx(under, "../data/RNA_seq_national/compar_donors_recipients/cytof_underexpressed_in_primary_donors.xlsx")
+```
+
+Because we are selecting features in the St Louis cohort irrespective of 
+the adjusted pvalue, it can happen that the behaviour of the features in donors 
+versus recipients are not matching in both cohorts.
+
+Therefore, I apply a second filtering by computing the median in donors and
+recipients in each cohort and by checking that the features have the same 
+behaviour in the two cohorts:
+```{r, echo = FALSE}
+mat_DR_louis <- readRDS("../data/RNAseq/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  magrittr::set_colnames(paste0("subst_", colnames(.))) %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(subst_GROUP == "primary_tolerant") %>% 
+  column_to_rownames("rn")
+mat_DR_cryo <- readRDS("../data/RNA_seq_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  magrittr::set_colnames(paste0("subst_", colnames(.))) %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(subst_GROUP == "primary_tolerant") %>% 
+  column_to_rownames("rn")
+
+over2 <- data.frame(t(rep(0, 7))) %>% 
+  magrittr::set_colnames(c("variable", "pvalue_St_Louis", "pvalue_Cryostem", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(over)){
+  tmp_l <- mat_DR_louis[over[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_louis)), "D", "R")) %>% 
+    dplyr::group_by(type) %>% 
+    summarise_all(median)
+  
+  tmp_c <- mat_DR_cryo[over[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_cryo)), "D", "R")) %>% 
+    dplyr::group_by(type) %>% 
+    summarise_all(median)
+  
+  if(tmp_l[1,2] >= tmp_l[2,2] && tmp_c[1,2] >= tmp_c[2,2]){
+    over2 <- rbind(over2, over[i,])
+  }
+}
+
+over2 <- over2[-1,]
+
+under2 <- data.frame(t(rep(0, 7))) %>% 
+  magrittr::set_colnames(c("variable", "pvalue_St_Louis", "pvalue_Cryostem", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(under)){
+  tmp_l <- mat_DR_louis[under[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_louis)), "D", "R")) %>% 
+    group_by(type) %>% 
+    summarise_all(median)
+  
+  tmp_c <- mat_DR_cryo[under[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_cryo)), "D", "R")) %>% 
+    group_by(type) %>% 
+    summarise_all(median)
+  
+  if(tmp_l[1,2] <= tmp_l[2,2] && tmp_c[1,2] <= tmp_c[2,2]){
+    under2 <- rbind(under2, under[i,])
+  }
+}
+
+under2 <- under2[-1,]
+
+print(paste0(nrow(over2), 
+             " variables were over-expressed in the donors compared to the recipients, and ", 
+             nrow(under2),
+             " variables were under-expressed in the donors compared to the recipients"))
+
+
+write.xlsx(over2, "../data/RNAseq/compar_donors_recipients/rnaseq_overexpressed_in_primary_donors.xlsx")
+write.xlsx(under2, "../data/RNAseq/compar_donors_recipients/rnaseq_underexpressed_in_primary_donors.xlsx")
+
+```
+
+I save these features and compute their pvalues/ fold changes:
+```{r, echo = FALSE}
+annot_genes <- as.data.frame(c(over2$variable, under2$variable))
+colnames(annot_genes) <- "Gene"
+
+# Compute the FC and pvalues:
+TS <- ifelse(grepl("D", rownames(mat_DR_louis)), "D", "R")
+
+TS <- factor(TS, levels=unique(TS))
+design <- model.matrix(~0+TS)
+colnames(design) <- levels(TS)
+#design
+fit <- limma::lmFit(t(mat_DR_louis[,c(over2$variable, under2$variable)]), design)
+  
+#### Create contrast matrix
+cont.matrix <- limma::makeContrasts(group1=D-R,
+                             group2=R-D,
+                             levels=design)
+#cont.matrix
+fit2 = limma::contrasts.fit(fit, cont.matrix)
+
+#### Moderate T-test with 'shrunken' se
+fit.eb <- limma::eBayes(fit2)
+
+
+allGenesGroup1<-limma::topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=1)
+
+getDEgenes<-function(expMatrix, pValCutOff, logFCcutOff){
+  topgenes<-expMatrix[expMatrix$adj.P.Val<pValCutOff,]
+  genes_up<-topgenes[topgenes$logFC>logFCcutOff,]
+  genes_down<-topgenes[topgenes$logFC< -logFCcutOff,]
+  ##Sort genes on logFC
+  genes_up<-genes_up[order(genes_up$logFC, decreasing=TRUE),]
+  genes_down<-genes_down[order(genes_down$logFC, decreasing=TRUE),]
+  genes_de_sorted<-rbind(genes_up, genes_down)
+
+  return(genes_de_sorted)
+}
+
+DEgenesGroup1<-getDEgenes(allGenesGroup1,1,0)
+
+#length(which(selected_genes_qt[sel_common] %in% rownames(DEgenesGroup1)))
+
+# add them to the table
+
+DEgenesGroup1 <- DEgenesGroup1[as.character(annot_genes$Gene),] 
+annot_genes <- cbind(annot_genes, DEgenesGroup1)
+
+write.xlsx(annot_genes, "../data/RNAseq/compar_donors_recipients/FC_464genes_louis.xlsx")
+```
+
+
+```{r, eval = FALSE}
+# setting the parameters: what you can expect in case of independent tests
+# in terms of FPs in one cohort and overlap.
+# caveat: the tests are not independent, but I would expect similar results
+
+ntests <- ncol(mat_louis_tmp)
+FP <- c(0.05,0.10,0.15,0.20)
+it <- 10000
+
+out.05.coh1 <- matrix(NA,ntests,it)
+out.05.coh2 <- matrix(NA,ntests,it)
+
+out.10.coh1 <- matrix(NA,ntests,it)
+out.10.coh2 <- matrix(NA,ntests,it)
+
+out.15.coh1 <- matrix(NA,ntests,it)
+out.15.coh2 <- matrix(NA,ntests,it)
+
+out.20.coh1 <- matrix(NA,ntests,it)
+out.20.coh2 <- matrix(NA,ntests,it)
+
+set.seed(123)
+for(i in (1:it)){
+  out.05.coh1[,i] <- rbinom(ntests,1,FP[1])
+  out.05.coh2[,i] <- rbinom(ntests,1,FP[1])
+  out.10.coh1[,i] <- rbinom(ntests,1,FP[2])
+  out.10.coh2[,i] <- rbinom(ntests,1,FP[2])
+  out.15.coh1[,i] <- rbinom(ntests,1,FP[3])
+  out.15.coh2[,i] <- rbinom(ntests,1,FP[3])
+  out.20.coh1[,i] <- rbinom(ntests,1,FP[4])
+  out.20.coh2[,i] <- rbinom(ntests,1,FP[4])
+}
+
+nFP.05.coh1 <- colSums(out.05.coh1)
+hist(nFP.05.coh1)
+nFP.05.coh2 <- colSums(out.05.coh2)
+hist(nFP.05.coh2)
+nFP.10.coh1 <- colSums(out.10.coh1)
+hist(nFP.10.coh1)
+nFP.10.coh2 <- colSums(out.10.coh2)
+hist(nFP.10.coh2)
+nFP.15.coh1 <- colSums(out.15.coh1)
+hist(nFP.15.coh1)
+nFP.15.coh2 <- colSums(out.15.coh2)
+hist(nFP.15.coh2)
+nFP.20.coh1 <- colSums(out.20.coh1)
+hist(nFP.20.coh1)
+nFP.20.coh2 <- colSums(out.20.coh2)
+hist(nFP.20.coh2)
+
+in.both.05 <- (out.05.coh1+out.05.coh2)>1
+overlap.nFP.05 <- colSums(in.both.05)
+hist(overlap.nFP.05)
+
+in.both.10 <- (out.10.coh1+out.10.coh2)>1
+overlap.nFP.10 <- colSums(in.both.10)
+hist(overlap.nFP.10)
+
+in.both.15 <- (out.15.coh1+out.15.coh2)>1
+overlap.nFP.15 <- colSums(in.both.15)
+hist(overlap.nFP.15)
+
+in.both.20 <- (out.20.coh1+out.20.coh2)>1
+overlap.nFP.20 <- colSums(in.both.20)
+hist(overlap.nFP.20)
+```
+
+
+
+
+We can see how these different variables were correlated:
+```{r, echo = FALSE}
+data_2use <- mat_louis_tmp[,c(over2$variable, under2$variable)] 
+#data_cryo <- mat_cryo_tmp[,c(overexpr_in_recip, underexp_in_recip)]
+saveRDS(mat_cryo, "../data/RNA_seq_national/compar_donors_recipients/mat_for_corr_prim.RDS")
+
+gr <- plot_correlations2(ft_df = data_2use,
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNA_seq_national/compar_donors_recipients/mat_for_corr_prim.RDS",
+                  node_color = c(rep("cadetblue1", nrow(over2)),
+                                 rep("darkgoldenrod1", nrow(under2))),
+                  pval_threshold = 0.01)
+
+```
+
+Save these correlations:
+```{r, echo = FALSE}
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                             min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(names(V(gr)))
+
+for( i in which(comp_sizes != 0)){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  v_names <- c(vertex_names, rep(0, nrow(annot_genes) - length(vertex_names)))
+  annot_genes <- cbind(annot_genes, v_names)
+}
+
+write.xlsx(annot_genes, file = "../data/RNAseq/compar_donors_recipients/correlated_components.xlsx")
+```
+
+And save the tables of D-R values for the genes that were selected, in both
+cohorts:
+```{r, echo = FALSE}
+write.xlsx(data_2use, "../data/RNAseq/compar_donors_recipients/primary_sel.xlsx", row.names = TRUE)
+
+direction <- c(rep("cadetblue1", nrow(over2)),
+               rep("darkgoldenrod1", nrow(under2)))
+saveRDS(direction, "../data/RNAseq/compar_donors_recipients/direction_features_primary_sel.RDS")
+
+data_cryo <- mat_cryo %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "primary_tolerant") %>% 
+  select(c(colnames(data_2use), "rn")) %>% 
+  column_to_rownames("rn")
+
+write.xlsx(data_cryo, "../data/RNA_seq_national/compar_donors_recipients/primary_sel.xlsx", row.names = TRUE)
+```
+
+
+### PCA 
+
+We can use the features that we just extracted as significantly differentially
+expressed in the primary tolerant donors and recipients to build a PCA:
+```{r, echo = FALSE}
+mat_DR_louis <- readRDS("../data/RNAseq/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+```
+
+```{r, echo = FALSE}
+mat_2use <- mat_DR_louis %>% 
+  rownames_to_column("rn") %>% 
+  ungroup() %>% 
+  mutate(GROUP = tolower(GROUP)) %>% 
+  dplyr::filter(GROUP == "primary_tolerant") %>% 
+  magrittr::set_colnames(paste0("subst_", make.names(colnames(.)))) %>% 
+  dplyr::select(c(over2$variable, under2$variable, "subst_rn")) %>% 
+  mutate(patient_type = ifelse(grepl("R", subst_rn), "R", "D"))
+
+mat_pca <- mat_2use %>% 
+  dplyr::select(-patient_type) %>% 
+  column_to_rownames("subst_rn")
+mat_pca <- apply(mat_pca, 2, scale)
+
+pca_l <- prcomp(mat_pca)
+plot(pca_l)
+```
+
+The features that we selected allow us to separate nicely the donors from 
+the recipients along the first principal component:
+```{r, echo = FALSE}
+mat4pca <- mat_2use %>% 
+  mutate(PC1 = pca_l$x[,1],
+         PC2 = pca_l$x[,2])
+
+ggplot(mat4pca, aes(x = PC1, y = PC2, col = patient_type), label = subst_rn) +
+  geom_point() +
+  geom_text(aes(label=subst_rn),hjust=0, vjust=0) +
+  scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+```
+
+We can map the Cryostem primary tolerant patients on this same PCA:
+```{r, echo = FALSE}
+mat_DR_cryo <- readRDS("../data/RNA_seq_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+
+mat_2use_cryo <- mat_DR_cryo %>% 
+  rownames_to_column("rn") %>% 
+  ungroup() %>% 
+  dplyr::filter(GROUP == "primary_tolerant") %>% 
+  magrittr::set_colnames(paste0("subst_", make.names(colnames(.)))) %>% 
+  dplyr::select(c(over2$variable, under2$variable, "subst_rn")) %>% 
+  mutate(patient_type = ifelse(grepl("D", subst_rn), "D", "R")) %>% 
+  arrange(patient_type)
+
+mat_pca <- mat_2use_cryo %>% 
+  dplyr::select(-patient_type) %>% 
+  column_to_rownames("subst_rn")
+mat_pca <- apply(mat_pca, 2, scale)
+
+new_coords <- scale(mat_pca, pca_l$center, pca_l$scale) %*% pca_l$rotation 
+
+mat4pca_cryo <- mat_2use_cryo %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2])
+
+all_2plot <- rbind(mat4pca %>% 
+                     mutate(cohort = rep("St_Louis", nrow(mat4pca))),
+                   mat4pca_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(mat4pca_cryo))))
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= patient_type, label = subst_rn)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=subst_rn),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("cadetblue3", "darkgoldenrod1")) +
+  ggtitle("Separation of primary tolerant donors vs recipients")
+```
+
+Boxplots of these features:
+```{r, eval = FALSE, echo = FALSE}
+pdf("outputs/plots/RNAseq/compar_donors_and_recipients/boxplots_primary.pdf",
+    height = 10, width = 14)
+for(i in c(over2$variable, under2$variable)){
+  louis_tmp <- mat4pca %>%
+    dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat4pca)/2), 1:(nrow(mat4pca)/2)))
+  cryo_tmp <- mat4pca_cryo %>%
+      dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat4pca_cryo)/2), 1:(nrow(mat4pca_cryo)/2)))
+  
+  ymin <- min(c(cryo_tmp$Var, louis_tmp$Var))
+  ymax <- max(c(cryo_tmp$Var, louis_tmp$Var))
+  
+  p1 <- ggplot(louis_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+    geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+    geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+    coord_cartesian(ylim = c(ymin, ymax)) +
+    ggtitle(paste0(i," in St Louis"))+
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+  
+  p2 <- ggplot(cryo_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+    geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+    geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+    coord_cartesian(ylim = c(ymin, ymax)) +
+    ggtitle(paste0(i," in Cryostem"))+
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+  gmix <- patchwork::wrap_plots(p1, p2)
+  print(gmix)
+}
+# dev.off()
+
+```
+
+Write St Louis and Cryostem tables in excel files:
+```{r, echo = FALSE}
+matl <- mat_2use %>% 
+  column_to_rownames("subst_rn")
+
+matc <- mat_2use_cryo %>% 
+  column_to_rownames("subst_rn")
+
+write.xlsx(matl, "../data/RNAseq/compar_donors_recipients/mat_DR_primary_St_Louis.xlsx", row.names = TRUE)
+write.xlsx(matc, "../data/RNA_seq_national/compar_donors_recipients/mat_DR_primary_Cryostem.xlsx", row.names = TRUE)
+```
+
+Compute "paired FCs"
+```{r, echo = FALSE}
+matl <- read.xlsx("../data/RNAseq/compar_donors_recipients/mat_DR_primary_St_Louis.xlsx", rowNames = TRUE)
+
+
+FC_louis <- as.data.frame(colnames(matl)[1:(ncol(matl)-1)]) %>% 
+  mutate(paired_FC = rep(0, ncol(matl)-1)) %>% 
+  magrittr::set_colnames(c("gene", "paired_FC"))  
+  
+for(i in 1:nrow(FC_louis)){
+  r <- matl[,as.character(FC_louis$gene[i])]
+  nb_couples <- length(r)/2
+  s <- 0
+  for(j in 1:nb_couples){
+    if(r[j] < 0 || r[j + nb_couples] < 0){
+      v1 <- r[j] - min(r[j], r[j + nb_couples]) +0.1
+      v2 <- r[j + nb_couples] - min(r[j], r[j + nb_couples]) +0.1
+    } else {
+      v1 <- r[j]
+      v2 <- r[j + nb_couples]
+    }
+    print(v1/v2)
+    s <- s + (v1 / v2)
+  }
+  s <- s/nb_couples
+  FC_louis$paired_FC[i] <- s
+}
+
+FC_louis <- as.data.frame(colnames(matl)[1:(ncol(matl)-1)]) %>% 
+  mutate(FC = rep(0, ncol(matl)-1),
+         logFC = rep(0, ncol(matl)-1)) %>% 
+  magrittr::set_colnames(c("gene", "FC", "logFC"))  
+  
+for(i in 1:nrow(FC_louis)){
+  r <- matl[,as.character(FC_louis$gene[i])]
+  D <- median(r[which(matl$patient_type == "D")])
+  R <- median(r[which(matl$patient_type == "R")])
+  if(D < 0 || R < 0){
+      v1 <- D - min(D, R) +0.1
+      v2 <- R - min(D, R) +0.1
+    } else {
+      v1 <- D
+      v2 <- R
+    }
+  FC_louis$FC[i] <- v1/v2
+  FC_louis$logFC[i] <- log(v1/v2)
+}
+
+write.xlsx(FC_louis, "../data/RNAseq/compar_donors_recipients/FCs_louis.xlsx")
+
+matc <- read.xlsx("../data/RNA_seq_national/compar_donors_recipients/mat_DR_primary_Cryostem.xlsx", rowNames = TRUE)
+
+FC_cryo <- as.data.frame(colnames(matc)[1:(ncol(matc)-1)]) %>% 
+  mutate(FC = rep(0, ncol(matc)-1),
+         logFC = rep(0, ncol(matc)-1)) %>% 
+  magrittr::set_colnames(c("gene", "FC", "logFC"))  
+  
+for(i in 1:nrow(FC_cryo)){
+  r <- matc[,as.character(FC_cryo$gene[i])]
+  D <- median(r[which(matc$patient_type == "D")])
+  R <- median(r[which(matc$patient_type == "R")])
+  if(D < 0 || R < 0){
+      v1 <- D - min(D, R) +0.1
+      v2 <- R - min(D, R) +0.1
+    } else {
+      v1 <- D
+      v2 <- R
+    }
+  FC_cryo$FC[i] <- v1/v2
+  FC_cryo$logFC[i] <- log(v1/v2)
+}
+
+write.xlsx(FC_cryo, "../data/RNAseq/compar_donors_recipients/FCs_cryo.xlsx")
+```
+
+
+## Comparison of secondary tolerant donors vs recipients
+
+```{r, echo = FALSE}
+mat_louis <- readRDS("../data/RNAseq/compar_donors_recipients/mat_all_patients.RDS")
+mat_cryo <- readRDS("../data/RNA_seq_national/compar_donors_recipients/mat_all_patients.RDS")
+
+pval_threshold <- 0.05
+
+common_colnames <- colnames(mat_louis)[which(colnames(mat_louis) %in% colnames(mat_cryo))]
+
+mat_louis_tmp <- mat_louis %>% 
+  dplyr::filter(group == "secondary_tolerant") %>% 
+  dplyr::select(common_colnames) %>% 
+  dplyr::select(-group)
+mat_cryo_tmp <- mat_cryo %>% 
+  dplyr::filter(group == "secondary_tolerant") %>% 
+  dplyr::select(common_colnames) %>% 
+  dplyr::select(-group)
+
+#resT_louis <- multtest::mt.maxT(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+#resP_louis <- mt.minP(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+
+all_in_recip <- data.frame(t(rep(0, 5))) %>% 
+magrittr::set_colnames(c("variable", "pvalue_St_Louis", "pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(ft_idx in seq_len(ncol(mat_louis_tmp))){
+  if(all(as.numeric(mat_louis_tmp[,ft_idx]) == 0)){
+    tl <- 1
+  } else{
+    tl <- wilcox.test(mat_louis_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  }
+  ml <- median(mat_louis_tmp[,ft_idx])
+  
+  tc <- wilcox.test(mat_cryo_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  mc <- median(mat_cryo_tmp[,ft_idx])
+  
+  all_in_recip <- rbind(all_in_recip, c(colnames(mat_louis_tmp)[ft_idx], tl, tc, ml, mc))
+}
+
+all_in_recip <- all_in_recip[-1,]
+
+#procs<-c("Bonferroni","Holm","Hochberg","SidakSS","SidakSD","BH","BY","ABH","TSBH")
+res2_l<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_St_Louis),"TSBH")
+res2_c<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_Cryostem),"TSBH")
+
+all_in <- all_in_recip %>% 
+  mutate(adj_pval_St_Louis = res2_l$adjp[order(res2_l$index),2],
+         adj_pval_Cryostem = res2_c$adjp[order(res2_c$index),2])
+
+print(paste0(length(which((all_in$adj_pval_Cryostem < pval_threshold)&(all_in$adj_pval_St_Louis < pval_threshold))), 
+      " genes varied significantly between donors and recipients in the two cohorts, with an adjusted pvalue threshold of ",
+      pval_threshold))
+
+print(paste0(length(which((as.numeric(all_in$pvalue_Cryostem) < pval_threshold)&(as.numeric(all_in$pvalue_St_Louis) < pval_threshold))), 
+      " genes varied significantly between donors and recipients in the two cohorts, with a pvalue threshold of ",
+      pval_threshold))
+
+
+overexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+underexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(all_in)){
+  r <- all_in[i,]
+  if((r$adj_pval_Cryostem <= pval_threshold && r$pvalue_St_Louis <= pval_threshold) && (r$median_Louis > 0 && r$median_Cryo > 0)){
+    overexpr_in_donors <- rbind(overexpr_in_donors, 
+                                c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  } else if((r$adj_pval_Cryostem <= pval_threshold && r$pvalue_St_Louis <= pval_threshold) && (r$median_Louis < 0 && r$median_Cryo < 0)){
+    underexpr_in_donors <- rbind(underexpr_in_donors, 
+                                 c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  }
+}
+
+over <- overexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+over <- over[-1,]
+
+under <- underexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+under <- under[-1,]
+
+# write.xlsx(over, "../data/metabo/compar_donors_recipients/cytof_overexpressed_in_secondary_donors.xlsx")
+# write.xlsx(under, "../data/metabo/compar_donors_recipients/cytof_underexpressed_in_secondary_donors.xlsx")
+```
+
+Because we are selecting features in the St Louis cohort irrespective of 
+the adjusted pvalue, it can happen that the behaviour of the features in donors 
+versus recipients are not matching in both cohorts.
+
+Therefore, I apply a second filtering by computing the median in donors and
+recipients in each cohort and by checking that the features have the same 
+behaviour in the two cohorts:
+```{r, echo = FALSE}
+mat_DR_louis <- readRDS("../data/RNAseq/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  magrittr::set_colnames(paste0("subst_", colnames(.))) %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(subst_GROUP == "secondary_tolerant") %>% 
+  column_to_rownames("rn")
+mat_DR_cryo <- readRDS("../data/RNA_seq_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  magrittr::set_colnames(paste0("subst_", colnames(.))) %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(subst_GROUP == "secondary_tolerant") %>% 
+  column_to_rownames("rn")
+
+over2 <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(over)){
+  tmp_l <- mat_DR_louis[over[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_louis)), "D", "R")) %>% 
+    dplyr::group_by(type) %>% 
+    summarise_all(median)
+  
+  tmp_c <- mat_DR_cryo[over[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_cryo)), "D", "R")) %>% 
+    dplyr::group_by(type) %>% 
+    summarise_all(median)
+  
+  if(tmp_l[1,2] >= tmp_l[2,2] && tmp_c[1,2] >= tmp_c[2,2]){
+    over2 <- rbind(over2, over[i,])
+  }
+}
+
+over2 <- over2[-1,]
+
+# under2 <- data.frame(t(rep(0, 5))) %>% 
+#   magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+# 
+# for(i in 1:nrow(under)){
+#   tmp_l <- mat_DR_louis[under[i,"variable"]] %>% 
+#     mutate(type = ifelse(grepl("D", rownames(mat_DR_louis)), "D", "R")) %>% 
+#     group_by(type) %>% 
+#     summarise_all(median)
+#   
+#   tmp_c <- mat_DR_cryo[under[i,"variable"]] %>% 
+#     mutate(type = ifelse(grepl("D", rownames(mat_DR_cryo)), "D", "R")) %>% 
+#     group_by(type) %>% 
+#     summarise_all(median)
+#   
+#   if(tmp_l[1,2] <= tmp_l[2,2] && tmp_c[1,2] <= tmp_c[2,2]){
+#     under2 <- rbind(under2, under[i,])
+#   }
+# }
+# 
+# under2 <- under2[-1,]
+
+print(paste0(nrow(over2), 
+             " variables were over-expressed in the donors compared to the recipients."))#", and ", 
+             # nrow(under2),
+             # " variables were under-expressed in the donors compared to the recipients"))
+
+
+write.xlsx(over2, "../data/RNAseq/compar_donors_recipients/cytof_overexpressed_in_secondary_donors.xlsx")
+#write.xlsx(under2, "../data/RNAseq/compar_donors_recipients/cytof_underexpressed_in_primary_donors.xlsx")
+
+```
+
+## Comparison of non tolerant donors vs recipients
+
+```{r, echo = FALSE}
+mat_louis <- readRDS("../data/RNAseq/compar_donors_recipients/mat_all_patients.RDS")
+mat_cryo <- readRDS("../data/RNA_seq_national/compar_donors_recipients/mat_all_patients.RDS")
+
+pval_threshold <- 0.05
+
+common_colnames <- colnames(mat_louis)[which(colnames(mat_louis) %in% colnames(mat_cryo))]
+
+mat_louis_tmp <- mat_louis %>% 
+  dplyr::filter(group == "non_tolerant") %>% 
+  dplyr::select(common_colnames) %>% 
+  dplyr::select(-group)
+mat_cryo_tmp <- mat_cryo %>% 
+  dplyr::filter(group == "non_tolerant") %>% 
+  dplyr::select(common_colnames) %>% 
+  dplyr::select(-group)
+
+#resT_louis <- multtest::mt.maxT(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+#resP_louis <- mt.minP(t(mat_louis_tmp), rep(1, nrow(mat_louis_tmp)), test="wilcoxon")
+
+all_in_recip <- data.frame(t(rep(0, 5))) %>% 
+magrittr::set_colnames(c("variable", "pvalue_St_Louis", "pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(ft_idx in seq_len(ncol(mat_louis_tmp))){
+  if(all(as.numeric(mat_louis_tmp[,ft_idx]) == 0)){
+    tl <- 1
+  } else{
+    tl <- wilcox.test(mat_louis_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  }
+  ml <- median(mat_louis_tmp[,ft_idx])
+  
+  tc <- wilcox.test(mat_cryo_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+  mc <- median(mat_cryo_tmp[,ft_idx])
+  
+  all_in_recip <- rbind(all_in_recip, c(colnames(mat_louis_tmp)[ft_idx], tl, tc, ml, mc))
+}
+
+all_in_recip <- all_in_recip[-1,]
+
+#procs<-c("Bonferroni","Holm","Hochberg","SidakSS","SidakSD","BH","BY","ABH","TSBH")
+res2_l<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_St_Louis),"TSBH")
+res2_c<-multtest::mt.rawp2adjp(as.numeric(all_in_recip$pvalue_Cryostem),"TSBH")
+
+all_in <- all_in_recip %>% 
+  mutate(adj_pval_St_Louis = res2_l$adjp[order(res2_l$index),2],
+         adj_pval_Cryostem = res2_c$adjp[order(res2_c$index),2])
+
+print(paste0(length(which((all_in$adj_pval_Cryostem < pval_threshold)&(all_in$adj_pval_St_Louis < pval_threshold))), 
+      " genes varied significantly between donors and recipients in the two cohorts, with an adjusted pvalue threshold of ",
+      pval_threshold))
+
+print(paste0(length(which((as.numeric(all_in$pvalue_Cryostem) < pval_threshold)&(as.numeric(all_in$pvalue_St_Louis) < pval_threshold))), 
+      " genes varied significantly between donors and recipients in the two cohorts, with a pvalue threshold of ",
+      pval_threshold))
+
+
+overexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+underexpr_in_donors <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(all_in)){
+  r <- all_in[i,]
+  if((r$adj_pval_Cryostem <= pval_threshold && r$adj_pval_St_Louis <= pval_threshold) && (r$median_Louis > 0 && r$median_Cryo > 0)){
+    overexpr_in_donors <- rbind(overexpr_in_donors, 
+                                c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  } else if((r$adj_pval_Cryostem <= pval_threshold && r$adj_pval_St_Louis <= pval_threshold) && (r$median_Louis < 0 && r$median_Cryo < 0)){
+    underexpr_in_donors <- rbind(underexpr_in_donors, 
+                                 c(colnames(mat_louis_tmp)[i], 
+                                  r$adj_pval_St_Louis, r$adj_pval_Cryostem, r$median_Louis, r$median_Cryo))
+  }
+}
+
+over <- overexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+over <- over[-1,]
+
+under <- underexpr_in_donors %>% 
+  arrange(adj_pvalue_Cryostem)
+under <- under[-1,]
+
+# write.xlsx(over, "../data/metabo/compar_donors_recipients/cytof_overexpressed_in_secondary_donors.xlsx")
+# write.xlsx(under, "../data/metabo/compar_donors_recipients/cytof_underexpressed_in_secondary_donors.xlsx")
+```
+
+Because we are selecting features in the St Louis cohort irrespective of 
+the adjusted pvalue, it can happen that the behaviour of the features in donors 
+versus recipients are not matching in both cohorts.
+
+Therefore, I apply a second filtering by computing the median in donors and
+recipients in each cohort and by checking that the features have the same 
+behaviour in the two cohorts:
+```{r, echo = FALSE}
+mat_DR_louis <- readRDS("../data/RNAseq/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  magrittr::set_colnames(paste0("subst_", colnames(.))) %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(subst_GROUP == "secondary_tolerant") %>% 
+  column_to_rownames("rn")
+mat_DR_cryo <- readRDS("../data/RNA_seq_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS") %>% 
+  magrittr::set_colnames(make.names(colnames(.))) %>% 
+  magrittr::set_colnames(paste0("subst_", colnames(.))) %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(subst_GROUP == "secondary_tolerant") %>% 
+  column_to_rownames("rn")
+
+over2 <- data.frame(t(rep(0, 5))) %>% 
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(over)){
+  tmp_l <- mat_DR_louis[over[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_louis)), "D", "R")) %>% 
+    dplyr::group_by(type) %>% 
+    summarise_all(median)
+  
+  tmp_c <- mat_DR_cryo[over[i,"variable"]] %>% 
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_cryo)), "D", "R")) %>% 
+    dplyr::group_by(type) %>% 
+    summarise_all(median)
+  
+  if(tmp_l[1,2] >= tmp_l[2,2] && tmp_c[1,2] >= tmp_c[2,2]){
+    over2 <- rbind(over2, over[i,])
+  }
+}
+
+over2 <- over2[-1,]
+
+under2 <- data.frame(t(rep(0, 5))) %>%
+  magrittr::set_colnames(c("variable", "adj_pvalue_St_Louis", "adj_pvalue_Cryostem", "median_Louis", "median_Cryo"))
+
+for(i in 1:nrow(under)){
+  tmp_l <- mat_DR_louis[under[i,"variable"]] %>%
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_louis)), "D", "R")) %>%
+    group_by(type) %>%
+    summarise_all(median)
+
+  tmp_c <- mat_DR_cryo[under[i,"variable"]] %>%
+    mutate(type = ifelse(grepl("D", rownames(mat_DR_cryo)), "D", "R")) %>%
+    group_by(type) %>%
+    summarise_all(median)
+
+  if(tmp_l[1,2] <= tmp_l[2,2] && tmp_c[1,2] <= tmp_c[2,2]){
+    under2 <- rbind(under2, under[i,])
+  }
+}
+
+under2 <- under2[-1,]
+
+print(paste0(nrow(over2), 
+             " variables were over-expressed in the donors compared to the recipients"," and ",
+             nrow(under2),
+             " variables were under-expressed in the donors compared to the recipients."))
+
+
+write.xlsx(over2, "../data/RNAseq/compar_donors_recipients/rnaseq_overexpressed_in_nontol_donors.xlsx")
+write.xlsx(under2, "../data/RNAseq/compar_donors_recipients/rnaseq_underexpressed_in_nontol_donors.xlsx")
+
+```
+
+We can see how these different variables were correlated:
+```{r, echo = FALSE}
+data_2use <- mat_louis_tmp[,c(over2$variable, under2$variable)] 
+#data_cryo <- mat_cryo_tmp[,c(overexpr_in_recip, underexp_in_recip)]
+saveRDS(mat_cryo, "../data/RNA_seq_national/compar_donors_recipients/mat_for_corr_non.RDS")
+
+gr <- plot_correlations2(ft_df = data_2use,
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNA_seq_national/compar_donors_recipients/mat_for_corr_non.RDS",
+                  node_color = c(rep("cadetblue1", nrow(over2)),
+                                 rep("darkgoldenrod1", nrow(under2))),
+                  pval_threshold = 0.01)
+
+```
+
+Save these correlations:
+```{r, echo = FALSE}
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                             min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(names(V(gr)))
+
+for( i in which(comp_sizes != 0)){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  v_names <- c(vertex_names, rep(0, nrow(annot_genes) - length(vertex_names)))
+  annot_genes <- cbind(annot_genes, v_names)
+}
+
+write.xlsx(annot_genes, file = "../data/RNAseq/compar_donors_recipients/correlated_components_nontol.xlsx")
+```
+
+And save the tables of D-R values for the genes that were selected, in both
+cohorts:
+```{r, echo = FALSE}
+write.xlsx(data_2use, "../data/RNAseq/compar_donors_recipients/nontol_sel.xlsx", row.names = TRUE)
+
+direction <- c(rep("cadetblue1", nrow(over2)),
+               rep("darkgoldenrod1", nrow(under2)))
+saveRDS(direction, "../data/RNAseq/compar_donors_recipients/direction_features_nontol_sel.RDS")
+
+data_cryo <- mat_cryo %>% 
+  rownames_to_column("rn") %>% 
+  dplyr::filter(group == "non_tolerant") %>% 
+  select(c(colnames(data_2use), "rn")) %>% 
+  column_to_rownames("rn")
+
+write.xlsx(data_cryo, "../data/RNA_seq_national/compar_donors_recipients/nontol_sel.xlsx", row.names = TRUE)
+```
+
+### PCA 
+
+We can use the features that we just extracted as significantly differentially
+expressed in the non tolerant donors and recipients to build a PCA:
+
+```{r, echo = FALSE}
+mat_2use <- mat_DR_louis %>% 
+  rownames_to_column("rn") %>% 
+  ungroup() %>% 
+  mutate(GROUP = tolower(GROUP)) %>% 
+  dplyr::filter(GROUP == "non_tolerant") %>% 
+  magrittr::set_colnames(paste0("subst_", make.names(colnames(.)))) %>% 
+  dplyr::select(c(over2$variable, under2$variable, "subst_rn")) %>% 
+  mutate(patient_type = ifelse(grepl("R", subst_rn), "R", "D"))
+
+mat_pca <- mat_2use %>% 
+  dplyr::select(-patient_type) %>% 
+  column_to_rownames("subst_rn")
+mat_pca <- apply(mat_pca, 2, scale)
+
+pca_l <- prcomp(mat_pca)
+plot(pca_l)
+```
+
+The features that we selected allow us to separate nicely the donors from 
+the recipients along the first principal component:
+```{r, echo = FALSE}
+mat4pca <- mat_2use %>% 
+  mutate(PC1 = pca_l$x[,1],
+         PC2 = pca_l$x[,2])
+
+ggplot(mat4pca, aes(x = PC1, y = PC2, col = patient_type), label = subst_rn) +
+  geom_point() +
+  geom_text(aes(label=subst_rn),hjust=0, vjust=0) +
+  scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+```
+
+We can map the Cryostem primary tolerant patients on this same PCA:
+```{r, echo = FALSE}
+mat_DR_cryo <- readRDS("../data/RNA_seq_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+
+mat_2use_cryo <- mat_DR_cryo %>% 
+  rownames_to_column("rn") %>% 
+  ungroup() %>% 
+  dplyr::filter(GROUP == "non_tolerant") %>% 
+  magrittr::set_colnames(paste0("subst_", make.names(colnames(.)))) %>% 
+  dplyr::select(c(over2$variable, under2$variable, "subst_rn")) %>% 
+  mutate(patient_type = ifelse(grepl("D", subst_rn), "D", "R")) %>% 
+  arrange(patient_type)
+
+mat_pca <- mat_2use_cryo %>% 
+  dplyr::select(-patient_type) %>% 
+  column_to_rownames("subst_rn")
+mat_pca <- apply(mat_pca, 2, scale)
+
+new_coords <- scale(mat_pca, pca_l$center, pca_l$scale) %*% pca_l$rotation 
+
+mat4pca_cryo <- mat_2use_cryo %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2])
+
+all_2plot <- rbind(mat4pca %>% 
+                     mutate(cohort = rep("St_Louis", nrow(mat4pca))),
+                   mat4pca_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(mat4pca_cryo))))
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= patient_type, label = subst_rn)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=subst_rn),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("cadetblue3", "darkgoldenrod1")) +
+  ggtitle("Separation of primary tolerant donors vs recipients")
+```
+
+
+Write St Louis and Cryostem tables in excel files:
+```{r, echo = FALSE}
+matl <- mat_2use %>% 
+  column_to_rownames("subst_rn")
+
+matc <- mat_2use_cryo %>% 
+  column_to_rownames("subst_rn")
+
+write.xlsx(matl, "../data/RNAseq/compar_donors_recipients/mat_DR_nontol_St_Louis.xlsx", row.names = TRUE)
+write.xlsx(matc, "../data/RNA_seq_national/compar_donors_recipients/mat_DR_nontol_Cryostem.xlsx", row.names = TRUE)
+```
+
+
+## CyTOF + Transcriptomics
+```{r}
+matl_cyto <- read.xlsx("../data/cyto/compar_donors_recipients/primary_sel.xlsx", rowNames = TRUE)
+matl_transcripto <- read.xlsx("../data/RNAseq/compar_donors_recipients/primary_sel.xlsx", rowNames = TRUE)
+
+colnames(matl_cyto) <- paste0("cyt_", colnames(matl_cyto))
+colnames(matl_transcripto) <- paste0("rna_", colnames(matl_transcripto))
+
+matc_cyto <- read.xlsx("../data/cyto_national/compar_donors_recipients/primary_sel.xlsx", rowNames = TRUE)
+matc_transcripto <- read.xlsx("../data/RNA_seq_national/compar_donors_recipients/primary_sel.xlsx", rowNames = TRUE)
+
+colnames(matc_cyto) <- paste0("cyt_", colnames(matc_cyto))
+colnames(matc_transcripto) <- paste0("rna_", colnames(matc_transcripto))
+
+if(all(rownames(matl_cyto) == rownames(matl_transcripto))){
+  data_2use <- cbind(matl_cyto, matl_transcripto)
+}
+
+if(all(rownames(matc_cyto) == rownames(matc_transcripto))){
+  merged <- cbind(matc_cyto, matc_transcripto)
+  saveRDS(merged, "../data/cyto/compar_donors_recipients/Cryo_cytof_and_rna_primary.RDS")
+} else {
+  if(nrow(matc_cyto) > nrow(matc_transcripto)){
+    matc_cyto <- matc_cyto[rownames(matc_transcripto),]
+  } else {
+    matc_transcripto <- matc_transcripto[rownames(matc_cyto),]
+  }
+  merged <- cbind(matc_cyto, matc_transcripto)
+  saveRDS(merged, "../data/cyto/compar_donors_recipients/Cryo_cytof_and_rna_primary.RDS")
+}
+
+dir1 <- readRDS("../data/cyto/compar_donors_recipients/direction_features_primary_sel.RDS")
+dir2 <- readRDS("../data/RNAseq/compar_donors_recipients/direction_features_primary_sel.RDS")
+
+gr <- plot_correlations2(ft_df = data_2use,
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/compar_donors_recipients/Cryo_cytof_and_rna_primary.RDS",
+                  node_color = c(dir1, dir2),
+                  pval_threshold = 0.01)
+```
+
+Save these correlations:
+```{r}
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                             min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(names(V(gr)))
+
+for( i in which(comp_sizes != 0)){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  v_names <- c(vertex_names, rep(0, nrow(annot_genes) - length(vertex_names)))
+  annot_genes <- cbind(annot_genes, v_names)
+}
+
+write.xlsx(annot_genes, file = "../data/cyto/compar_donors_recipients/correlated_components_cyto_and_rna.xlsx")
+```
+
