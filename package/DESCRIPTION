@@ -1,8 +1,8 @@
 Package: BioGVHD
 Title: Analysis of the BioGVHD cytometry, metabolomics and transcriptomics data
 Version: 0.0.0.9000
-Authors@R: person("Helena", "Todorov", email = "helena.todorov@ugent.be", role = c("aut", "cre"))
-Description: What the package does (one paragraph).
+Authors@R: person("Helena", "Todorov", email = "helena.todorov.ht@gmail.com", role = c("aut", "cre"))
+Description: The package regroups scripts, functions and markdowns that were generated for the paper "Deciphering operational tolerance after allogeneic hematopoietic stem cell transplantation through multi-omics integrative analysis" (Dubouchet, Todorov et al), published in the Science Translational Medicine journal.
 Depends: 
   R (>= 3.4.4)
 Imports:
