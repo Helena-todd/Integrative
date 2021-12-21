@@ -52,7 +52,7 @@ ff_agg_d <- fcs_to_agg(fcs_dir= fcs_dir,
                         fcs_names= donor_names,
                         seed = 1,
                         cTotal = 10000*length(donor_names),
-                        output_name = "aggregate_d.fcs")
+                        output_name = "aggregate_d2.fcs")
 
 prettyMarkerNames <- ff_agg_d@parameters@data[,"desc"] #change names of markers in flowSOM
 prettyMarkerNames <- gsub(".*_", "", prettyMarkerNames)
@@ -78,7 +78,7 @@ for (file_nb in files2rescale){
 }
 # and plot results after scaling:
 plot_aggregate_markers(patient_names = donor_names, samp_patients=samp_donor, color_by = "DATEOFCYTOFEXPERIMENT",
-                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_rescaled_date_34donors.png",
+                       prettyMarkerNames, pheno_marks, png_name= "Aggregate_rescaled_date_34donors2.png",
                        ff_agg = ff_agg_d )
 
 ### markersToPlot
