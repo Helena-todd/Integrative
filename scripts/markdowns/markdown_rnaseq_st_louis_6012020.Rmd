@@ -1,0 +1,4532 @@
+---
+title: "RNAseq_st_louis"
+author: "helena"
+date: "09/10/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r imports, echo=FALSE, results='hide', warning = FALSE}
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(openxlsx)
+  library(metabolomics)
+  library(BioGVHD)
+  library(tidyverse)
+  library(data.table)
+  library(dendextend)
+  library(ggplot2)
+  library(mlbench)
+  library(caret)
+  library(nnet)
+  library(pROC)
+  library(igraph)
+  library(edgeR)
+  library(triwise)
+  library(htmlwidgets)
+  library(biomaRt)
+  library(org.Hs.eg.db) 
+  library(clusterProfiler)
+  library(VennDiagram)
+  library(qsub)
+  library(gridExtra)
+})
+options("scipen"=100)
+```
+
+
+```{r, echo = FALSE}
+## Liesbet's and Laetitia's functions
+###Get DE genes
+getDEgenes<-function(expMatrix, pValCutOff, logFCcutOff){
+  topgenes<-expMatrix[expMatrix$adj.P.Val<pValCutOff,]
+  genes_up<-topgenes[topgenes$logFC>logFCcutOff,]
+  genes_down<-topgenes[topgenes$logFC< -logFCcutOff,]
+  ##Sort genes on logFC
+  genes_up<-genes_up[order(genes_up$logFC, decreasing=TRUE),]
+  genes_down<-genes_down[order(genes_down$logFC, decreasing=TRUE),]
+  genes_de_sorted<-rbind(genes_up, genes_down)
+
+  return(genes_de_sorted)
+}
+
+###Normalize per gene
+normalizePerGene<-function(expMatrix){
+  resultMatrix<-t(apply(expMatrix, 1, function(x)(x-min(x))/(max(x)-min(x))))
+
+  return(resultMatrix)
+}
+
+## convert to Entrez Id
+convertIDs <- function( ids, fromKey, toKey, db, ifMultiple=c( "putNA", "useFirst" ) ) {
+stopifnot( inherits( db, "AnnotationDb" ) )
+ifMultiple <- match.arg( ifMultiple )
+suppressWarnings( selRes <- AnnotationDbi::select( 
+db, keys=ids, keytype=fromKey, columns=c(fromKey,toKey) ) )
+if( ifMultiple == "putNA" ) {
+duplicatedIds <- selRes[ duplicated( selRes[,1] ), 1 ] 
+selRes <- selRes[ ! selRes[,1] %in% duplicatedIds, ] }
+return( selRes[ match( ids, selRes[,1] ), 2 ] )
+}
+```
+
+## RNA seq analysis of the St Louis cohort
+
+I first read in the raw data:
+
+```{r read_data_st_louis}
+countData<-read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/RNAseq/Global_table_StLouis_completed.xlsx")
+colnames(countData) <- as.character(countData[1,]) # set patient names as colnames
+rownames(countData) <- countData$ID # set gene names as rownames
+countData_withinfo <- countData[,-1]
+```
+
+I can then look at the extra information on the patients' unmapped genes, lib size, ...
+
+```{r, echo = FALSE}
+## Look at the info on samples:
+plot(as.numeric(countData_withinfo[2,]), ylab = "unmapped genes", xlab = "patients")
+plot(as.numeric(countData_withinfo[3,]), ylab = rownames(countData)[3], xlab = "patients")
+above <- which(as.numeric(countData_withinfo[3,]) > 8*10^6)
+colnames(countData_withinfo)[above]
+plot(as.numeric(countData_withinfo[4,]), ylab = rownames(countData)[4], xlab = "patients")
+plot(as.numeric(countData_withinfo[5,]), ylab = rownames(countData)[5], xlab = "patients")
+colnames(countData_withinfo)[which(as.numeric(countData_withinfo[5,]) > 5*10^6)]
+# [1] "D708"
+
+countData <- countData[6:nrow(countData), 2:ncol(countData)] # rm the informations on unmapped, ambiguous...
+dim(countData)
+```
+
+It seems like the patient "D708" might be a problematic sample, I keep it in mind for the rest of the analysis.
+
+I then remove the genes that are not present in both cohorts:
+```{r, eval = FALSE, echo = FALSE}
+other_cohort<-read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/RNAseq/Global Table Count Cryostem 01.2019.xlsx")
+colnames(other_cohort) <- as.character(other_cohort[1,]) # set patient names as colnames
+rownames(other_cohort) <- other_cohort$ID # set gene names as rownames
+
+other_cohort <- other_cohort[6:nrow(other_cohort), 2:ncol(other_cohort)] # rm the informations on unmapped, ambiguous...
+dim(other_cohort)
+length(which(!rownames(other_cohort) %in% rownames(countData)))
+```
+
+All the genes are common to both cohorts, I don't need to remove any of them.
+
+I then load in the clinical data, and reorder the RNAseq and clinical data tables so that they are in the same order:
+
+```{r}
+colData<-read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+colData <- colData[!is.na(colData$RNAseq.ID),] # remove rows with no RNAseq sample
+rownames(colData) <- colData$Id.Cryostem.R
+colnames(colData)[which(colnames(colData)=="RNA.INTEGRITY.NUMBER.(RIN)")] <- "RNA.INTEGRITY"
+
+### Reorder
+countData<-countData[,rownames(colData)]
+```
+
+I then identify the donors and recipients, for which we have complete cases:
+```{r}
+complete_couples <- colData$COUPLENUMBER[which(duplicated(colData$COUPLENUMBER))]
+
+complete_names <- rownames(colData)[which(colData$COUPLENUMBER %in% complete_couples)]
+donor_names <- complete_names[grep("D", complete_names)]
+donor_id <- which(colnames(countData) %in% donor_names)
+
+recip_names <- complete_names[grep("R", complete_names)]
+recip_id <- which(colnames(countData) %in% recip_names)
+```
+
+Finally, I generate the age and gender vectors that will be used for modeling in 
+all patients (donors, recipients and couples):
+```{r, echo = FALSE}
+couple_info <- colData %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>%
+  dplyr::select(c("COUPLENUMBER", "GENDER", "DOG", "DOB", "GROUP",
+           "RNA.INTEGRITY", "CMVStatus", "Id.Cryostem.R")) %>% 
+  mutate(DOB = as.Date(DOB, format = "%d.%m.%Y"),
+         DOG = as.Date(DOG, format = "%d.%m.%Y")) 
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       gender_donors <- couple_info$GENDER[c(FALSE,TRUE)],
+       gender_donors <- couple_info$GENDER[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       gender_recip <- couple_info$GENDER[c(TRUE,FALSE)],
+       gender_recip <- couple_info$GENDER[c(FALSE,TRUE)])
+
+gender_comp <- paste0(gender_donors, gender_recip)
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       age_recip <- couple_info$DOG[c(TRUE, FALSE)] - couple_info$DOB[c(TRUE, FALSE)],
+       age_recip <- couple_info$DOG[c(FALSE, TRUE)] - couple_info$DOB[c(FALSE, TRUE)])
+
+couple_info <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2)) %>% 
+  column_to_rownames("rownames")
+head(couple_info)
+```
+
+
+## Analysis on the recipients
+
+### Preprocessing :
+
+I will first focus on the recipients only, and perform a standard preprocessing 
+(keep genes with more than one count per million in at least three patients):
+
+```{r preproc_recip, echo=FALSE, eval = FALSE}
+counts <- countData[,c(recip_id)]
+
+count_nb <- apply(counts,2,as.numeric) # turn characters into numerics
+rownames(count_nb) <- rownames(counts) # restore the rownmes which were lost in the transfo
+counts <- count_nb
+
+### Preprocessing
+y <- DGEList(counts = counts)
+keep = rowSums(cpm(y)>1) >= 3
+y = y[keep,]
+dim(y) # from 69000 genes to 18000 genes after this filter
+
+# Reset lib sizes
+y$samples$lib.size = colSums(y$counts)
+```
+
+The names of the genes are in the ensembl ID format. When possible, I replace 
+them with the associated gene symbol:
+```{r, eval = FALSE, echo = FALSE}
+##CONVERT ENSEMBL GENE NAME TO ENTREZID & SYMBOL
+hgnc_symbol <- convertIDs( rownames(y$counts), "ENSEMBL", "SYMBOL", org.Hs.eg.db )
+
+counts_gene_symbol <- y$counts
+names_2change <- hgnc_symbol[-which(is.na(hgnc_symbol))]
+names_2keep_idx <- which(is.na(hgnc_symbol))
+dupp <- names_2change[which(duplicated(names_2change))]
+dupp_idx <- which(hgnc_symbol %in% dupp)[c(T,F)]
+final_ids_2keep <- c(names_2keep_idx, dupp_idx)
+
+rownames(counts_gene_symbol)[-final_ids_2keep] <- hgnc_symbol[-final_ids_2keep]
+
+y$counts <- counts_gene_symbol
+```
+
+```{r, echo = FALSE, eval = FALSE}
+##CONVERT ENSEMBL GENE NAME TO GO terms
+library(biomaRt)
+# select mart and data set
+bm <- useMart("ensembl")
+bm <- useDataset("hsapiens_gene_ensembl", mart=bm)
+
+# Get ensembl gene ids and GO terms
+EG2GO <- getBM(mart=bm, attributes=c('ensembl_gene_id','go_id'))
+
+myEG2GO <- EG2GO[which(EG2GO$ensembl_gene_id %in% rownames(y$counts)),]
+```
+
+
+Perform normalisation and initiate the design matrix (per group)
+
+```{r, eval = FALSE, echo = FALSE}
+# compute norm_factors
+normfac <- calcNormFactors(y, method = "TMM")
+
+#### Create design matrix
+# for the three groups :
+patient_groups <- tolower(colData$GROUP)
+TS <- patient_groups[c(recip_id)]
+
+TS <- factor(TS, levels=unique(TS))
+design <- model.matrix(~0+TS)
+colnames(design) <- levels(TS)
+design
+
+#voom
+#In limma, read counts are converted to log2-counts-per-million (logCPM) and
+#the mean-variance relationship is modelled either with precision weights or
+#with an empirical Bayes prior trend. The precision weights approach is called “voom”
+# lib.size <- counts$samples$lib.size * counts$samples$norm.factors
+# E <- t(log2(t(counts + 0.5)/(lib.size + 1) * 1e+06))
+v <- voom(y, design, plot = TRUE)
+expTable<-v$E
+```
+
+I save the produced objects:
+
+```{r, eval = FALSE, echo = FALSE}
+DE_list <- list(v, y, design)
+
+save(expTable, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/expression_table_recip.RData")
+save(DE_list, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/data_for_DE_recip.RData")
+```
+
+Load the produced data :
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/expression_table_recip.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/data_for_DE_recip.RData")
+```
+
+### Differential Analysis 
+
+Fit a model to the design:
+```{r, echo = FALSE}
+names(DE_list) <- c("v", "y", "design")
+fit <- lmFit(DE_list$v, DE_list$design)
+
+#### Create contrast matrix
+cont.matrix <- makeContrasts(group1=non_tolerant-primary_tolerant,
+                             group2=non_tolerant-secondary_tolerant,
+                             group3=primary_tolerant-secondary_tolerant,
+                             levels=DE_list$design)
+cont.matrix
+fit2 = contrasts.fit(fit, cont.matrix)
+
+#### Moderate T-test with 'shrunken' se
+fit.eb <- eBayes(fit2)
+```
+
+Adjust the pvalues for multiple testing :
+```{r, echo = FALSE}
+#### Adjust P-values via Benjamini-Hochberg
+##### 1. non-tol vs tol-1
+allGenesGroup1<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=1)
+DEgenesGroup1<-getDEgenes(allGenesGroup1,0.05,1)
+paste0("Non tolerant vs primary: ", dim(DEgenesGroup1)[1])
+##84
+
+##### 2. non-tol vs tol-2
+allGenesGroup2<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=2)
+DEgenesGroup2<-getDEgenes(allGenesGroup2,0.05,1)
+paste0("Non tolerant vs secondary: ", dim(DEgenesGroup2)[1])
+##57
+
+##### 3. tol-1 vs tol-2
+allGenesGroup3<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=3)
+DEgenesGroup3<-getDEgenes(allGenesGroup3,0.05,1)
+paste0("Primary vs secondary: ", dim(DEgenesGroup3)[1])
+##0
+
+# write.xlsx(DEgenesGroup1, "../data/RNAseq/recip_only/Triwise/DEgenesGroup1.xlsx", row.names = TRUE)
+# write.xlsx(DEgenesGroup2, "../data/RNAseq/recip_only/Triwise/DEgenesGroup2.xlsx", row.names = TRUE)
+# write.xlsx(DEgenesGroup3, "../data/RNAseq/recip_only/Triwise/DEgenesGroup3.xlsx", row.names = TRUE)
+```
+
+Plot a triwise plot and save an interactive triwise plot:
+It seems like the majority of differentially expressed genes are being 
+overexpressed in tolerant recipients.
+```{r, echo = FALSE}
+##### All DE genes #####
+allDEgenes<-unique(c(rownames(DEgenesGroup1),rownames(DEgenesGroup2),rownames(DEgenesGroup3)))
+length(allDEgenes)
+##282
+
+wantedColors<-c(nodiffall="#FFFFFF80",diffall="indianred1")
+
+design <- DE_list$design
+##### Triwise plots
+non_tol_mean<-apply(expTable[,as.numeric(which(design[,1]==1))],1,mean)
+tol1_mean<-apply(expTable[,as.numeric(which(design[,2]==1))],1,mean)
+tol2_mean<-apply(expTable[,as.numeric(which(design[,3]==1))],1,mean)
+
+expTable_mean<-cbind(non_tol_mean, tol1_mean, tol2_mean)
+colnames(expTable_mean)<-c('Non_tol','Primary_tol','Secondary_tol')
+
+theBarycoords<-transformBarycentric(expTable_mean)
+wantedColors<-c(nodiffall="#FFFFFF00",diffall="indianred1")
+
+barycoords = theBarycoords
+Gdiffexp = allDEgenes
+
+###Triwise plot
+### Plot only the DEgenes, to "clean up" the plots a bit:
+expDE_mean <- expTable_mean[allDEgenes,]
+DEBarycoords<-transformBarycentric(expDE_mean)
+p<-plotDotplot(DEBarycoords, Gdiffexp=allDEgenes, colorvalues=wantedColors,
+               showlabels = F, rmax = 4)
+print(p)
+```
+
+```{r, echo = FALSE, eval = FALSE}
+library(org.Hs.eg.db)
+library(GO.db)
+Eoi <- expDE_mean
+gsets = AnnotationDbi::as.list(org.Hs.egGO2ALLEGS)
+gsets <- as.list(org.Hs.egGO2ALLEGS) %>% map(unique) %>% map(function(entrez_ids) {
+  org.Hs.egSYMBOL[entrez_ids] %>% as.list() %>% unlist() %>% unname()
+})
+gsets = sapply(gsets, function(gset) intersect(rownames(Eoi), unique(as.character(gset))))
+gsetindex = dplyr::bind_rows(lapply(AnnotationDbi::as.list(GOTERM[names(gsets)]), function(goinfo) {
+  tibble(name=Term(goinfo), definition=Definition(goinfo), ontology=Ontology(goinfo), gsetid = GOID(goinfo))
+}))
+gsets = gsets[gsetindex %>% filter(ontology == "BP") %>% .$gsetid]
+
+scores = testUnidirectionality(barycoords, gsets, Gdiffexp, statistic = "rank", mc.cores = 8, nsamples=1e+6)
+scores = left_join(scores, gsetindex, by="gsetid") %>% filter(qval < 0.05) %>% arrange(qval, z)
+
+scores2 = scores[(scores$qval < 0.05) & (scores$z > 0.15), ]
+scores2$redundancy = estimateRedundancy(scores2, gsets, Gdiffexp)
+
+plotPvalplot(scores2 %>% top_n(20, redundancy), colnames(Eoi))
+plotPvalplot(scores2, colnames(Eoi))
+plotPvalplot(scores2, c("Non_tol", "Primary_tol", "Secondary_tol"), colorby = "superpathway")
+scores_2share <- scores2 %>% arrange(redundancy)
+
+write.xlsx(scores_2share, "../data/RNAseq/recip_only/Triwise/gene_set_scores.xlsx")
+```
+
+```{r, echo = FALSE, eval = FALSE}
+list_gene_sets <- rlist::list.clean(gsets, function(x) length(x) == 0L, recursive = FALSE)
+
+scores_2share <- read.xlsx("../data/RNAseq/recip_only/Triwise/gene_set_scores.xlsx")
+gsets_2share <- list_gene_sets[scores_2share$gsetid]
+names(gsets_2share) <- gsub(":", "_", names(gsets_2share))
+write.xlsx(gsets_2share, "../data/RNAseq/recip_only/Triwise/gene_sets.xlsx")
+```
+
+```{r, eval=FALSE, echo=FALSE}
+#Re-formate gene-sets
+
+xlsxFile <- "outputs/data/RNAseq/recip_only/Triwise/gene_sets.xlsx"
+
+sheet_names = openxlsx::getSheetNames(xlsxFile)
+sheet_list = as.list(rep(NA, length(sheet_names)))
+names(sheet_list) = sheet_names
+for (sn in sheet_names) {
+  sheet_list[[sn]] = openxlsx::read.xlsx(xlsxFile, sheet=sn)
+}
+
+sheet_list2 <- lapply(seq_along(sheet_list), function(idx){
+  tmp <- sheet_list[[idx]]
+  tmp2 <- c(colnames(tmp), tmp[,1])
+  tmp2
+})
+
+df_set <- t(plyr::ldply(sheet_list2, rbind))
+colnames(df_set) <- names(sheet_list)
+
+write.xlsx(df_set, "../data/RNAseq/recip_only/Triwise/df_gene_sets.xlsx")
+  
+```
+
+
+```{r, eval = FALSE, echo = FALSE}
+#######################
+### Plot only the DEgenes, to "clean up" the plots a bit:
+expDE_mean <- expTable_mean[allDEgenes,]
+DEBarycoords<-transformBarycentric(expDE_mean)
+p<-interactiveDotplot(expDE_mean, Gdiffexp=allDEgenes, plotLocalEnrichment=FALSE,
+                      rmax = 4)
+saveWidget(p,file="~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/interactiveTriwisePlot_filtered_DEgenes_all_organs.html")
+```
+
+Boxplots of the 282 genes that were differentailly expressed
+```{r, echo = FALSE, eval = FALSE}
+gg_color_hue <- function(n) {
+  hues = seq(15, 375, length = n + 1)
+  hcl(h = hues, l = 65, c = 100)[1:n]
+}
+
+n = 3
+cols = gg_color_hue(n)
+
+pdf("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/Triwise/boxplots.pdf",
+    height = 7, width = 9)
+for (idx in seq_along(allDEgenes)){
+  data_tmp <- cbind(expr = expTable[allDEgenes[idx],],
+                    group = tolower(couple_info[colnames(expTable), "GROUP"])) %>% 
+    as.data.frame() %>% 
+    mutate(group = factor(group, levels = c("non_tolerant", "secondary_tolerant", "primary_tolerant")))
+  p <- ggplot(as.data.frame(data_tmp), aes(x = group, y = as.numeric(expr), col = group)) +
+    geom_boxplot() +
+    geom_jitter() +
+    theme_minimal() +
+    ylab(allDEgenes[idx]) +
+    scale_color_manual(values = c(cols[1], cols[3], cols[2]))
+  print(p)
+}
+dev.off()
+```
+
+
+### Machine learning approach :
+
+We first filter out lowly variable genes:
+
+```{r, echo = FALSE}
+sds <- apply(expTable,1,sd)
+plot(sort(sds), type = "l")
+abline(h=quantile(sds, 0.5), col="red")
+expT <- expTable[which(sds>=quantile(sds, 0.5)),]
+rnames <- rownames(expT)
+expT <- apply(expT,2,as.numeric)
+rownames(expT) <- rnames
+```
+
+
+Prepare the data:
+```{r, cache=FALSE, results='hide', warning=FALSE, comment=FALSE, warning=FALSE, message = FALSE, include=FALSE, echo = FALSE}
+
+norm_data <- t(expT)
+patient_groups <- tolower(colData$GROUP)
+group <- patient_groups[c(recip_id)]
+norm_data <- as.data.frame(norm_data) %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(group = group) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  dplyr::select(group, rownames(expT))
+norm_data[,1] <- as.factor(norm_data[,1])
+colnames(norm_data) <- make.names(colnames(norm_data))
+
+norm_data_3gr <- norm_data
+```
+
+We perform a PCA on the recipients to see if we already observe some structure 
+in the data, and if there isn't too much batch effect:
+```{r, echo = FALSE}
+colData_recip <- colData[c(recip_id),] %>% 
+  mutate(GROUP = tolower(GROUP))
+
+pca <- prcomp(norm_data[,-1])
+
+pca_2plot <- as.data.frame(pca$x) %>% 
+  mutate(Id.Cryostem.R = rownames(pca$x)) %>% 
+  left_join(colData_recip, by = "Id.Cryostem.R")
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(GROUP), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(RNAseq.RUN), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.numeric(RNA.INTEGRITY), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(GROUP), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) +
+  theme(axis.ticks=element_blank(),
+        axis.text = element_blank(),
+        axis.title = element_blank(),
+          text = element_text(size=25)) +
+  ggtitle("Tolerance group of the St Louis recipients") +
+  theme(
+      panel.background = element_rect(fill = "white", colour = "white",
+                                      size = 2, linetype = "solid"),
+      panel.grid.major = element_line(size = 0.5, linetype = 'solid',
+                                      colour = "#99999920")
+      # panel.grid.minor = element_line(size = 0.25, linetype = 'solid',
+      #                                 colour = "grey")
+    ) +
+  labs(col="GROUP") 
+
+```
+On the PCA, some non tolerant recipients seem to be quite separated from the rest
+of the patients (more on the left). They correspond to the high CMV patients 
+that we had already identified as quite different in the CyTOF data
+
+
+We can try to build a random forest model using all the genes of the 
+recipients:
+```{r, echo = FALSE, eval = FALSE}
+set.seed(1)
+rf_recip <- ranger::ranger(group~., norm_data, num.trees = 5000,
+                           importance = "impurity")
+rf_recip$confusion.matrix
+rf_recip$prediction.error*100
+```
+But it seems like the data doesn't allow us to classify into the three tolerance
+groups. We can try to simplify the classification problem:
+
+First, we try to separate tolerant from non tolerant recipients:
+```{r, eval = FALSE}
+set.seed(1)
+rf <- rf_tol_non_tol(df_orig = norm_data, ntree = 5000)
+rf
+```
+
+Second, we can try to separate primary tolerant from secondary tolerant recipients:
+```{r, eval = FALSE}
+set.seed(1)
+rf <- rf_tol1_tol2(df_orig = norm_data, ntree = 5000)
+rf
+```
+But it seems like we can't classify between these two groups of patients yet.
+
+<!-- Do we retrieve the genes that we had found in the DE analysis? -->
+<!-- ```{r} -->
+<!-- DE_rf_genes <- allDEgenes[which(allDEgenes %in% goi_rf_recip)] -->
+<!-- print(paste0("Number of DE genes: ", length(allDEgenes))) -->
+<!-- print(paste0("Number of selected top importance genes in the random forest: ", length(goi_rf_recip))) -->
+<!-- print(paste0("Number of genes that are common between the two: ", length(which(allDEgenes %in% goi_rf_recip)))) -->
+<!-- allDEgenes[which(allDEgenes %in% goi_rf_recip)] -->
+<!-- ``` -->
+
+## Feature selection
+
+### Identifying features that vary the most between non and tolerant recipients:
+
+Run the permutation distribution, taking demographic variables into account:
+I first add the age and gender compatibility information to the data.
+```{r, echo = FALSE}
+recip_info <- couple_info %>% 
+  dplyr::filter(grepl("R", rownames(couple_info))) 
+
+norm_data <- norm_data %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  left_join(recip_info %>% dplyr::select(Id.Cryostem.R, gender_comp, age_recip),
+            by = "Id.Cryostem.R") %>% 
+  column_to_rownames("Id.Cryostem.R")
+```
+
+And then compute the permutation distribution for the non vs tolerance:
+```{r, eval=FALSE, echo = FALSE}
+norm_data$group <- as.character(norm_data$group)
+norm_data$group[which(norm_data$group!="non_tolerant")] <- "tolerant"
+norm_data$group <- as.factor(norm_data$group)
+
+perm_vals_PRISM(norm_data = norm_data, PRISM_name = "rnaseq_r_TNT")
+
+handle3 <- readRDS("handle_louis_donors_TNT.rds")
+perm_vals <- qsub_retrieve(handle3)
+
+save(perm_vals, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/perm_vals_TNT.RData")
+save(norm_data, file= "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/norm_data_TNT.RData")
+```
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/perm_vals_TNT.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/norm_data_TNT.RData")
+
+gr_medians <- norm_data %>%
+  group_by(group) %>%
+  summarize_if(is.numeric, median) %>%
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+
+#### Threshold of 0.90
+
+We isolate the genes that were selected as informative to classify the non and 
+tolerant recipients, with a 0.90 threshold:
+```{r}
+qt <- unlist(map(perm_vals, 1))
+densityplot(qt)
+selected_genes_qt <- colnames(norm_data)[which(qt>.90)+1]
+write.xlsx(selected_genes_qt, file = "../data/RNAseq/recip_only/perm_val_TNT_90_thresh.xlsx")
+```
+
+We can see if the features that we selected with feature selection correspond to
+the genes that had been found through differential analysis:
+```{r, echo = FALSE}
+print(paste0(length(which(allDEgenes %in% selected_genes_qt)), " out of the ", 
+       length(allDEgenes), 
+       " genes that were identified as differentially expressed were retrieved with our feature selection method."))
+```
+
+We can then see which of these selected genes are common with the Cryostem cohort:
+```{r, echo = FALSE}
+sel_cryo <- read.xlsx("../data/RNA_seq_national/recip_only/perm_val_TNT_90_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_genes_qt %in% sel_cryo$X1)
+print(paste0(length(sel_common), " genes were common between the two cohorts."))
+# selected_genes_qt[sel_common]
+```
+
+Graph of these selected genes that were found commonly between the two cohorts:
+```{r, echo = FALSE}
+correlations <- norm_data[,selected_genes_qt[sel_common]] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selected_genes_qt[sel_common])
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#0000FF80"
+  }
+}
+
+# recip_path <- "~/Desktop/"
+# 
+# pdf(paste0(recip_path, "cryo_common_metabolites_recip_05.pdf"), width = 12, height = 8)
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+
+I save the 408 features in an excel file:
+The excel file contains information on which features were correlated in the graph above.
+It also contains, for every gene, the associated logFC, pvalue..., where the comparison 
+is in non tolerant versus tolerant patients (eg, a positive Fold Change for a gene 
+therefore means that the gene is overexpressed in non tolrant patients)
+```{r, echo = FALSE}
+rna_recip_louis_TNT_90 <- norm_data[,c("group", selected_genes_qt[sel_common])]
+save(rna_recip_louis_TNT_90,
+     file = "../data/RNAseq/recip_only/rna_recip_louis_TNT_90.RData")
+
+# Identify connected components in the graph:
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                 min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(selected_genes_qt[sel_common])
+
+# Compute the FC and pvalues:
+patient_groups <- tolower(colData$GROUP)
+patient_groups[which(patient_groups != "non_tolerant")] <- "tolerant"
+TS <- patient_groups[c(recip_id)]
+
+TS <- factor(TS, levels=unique(TS))
+design <- model.matrix(~0+TS)
+colnames(design) <- levels(TS)
+#design
+fit <- lmFit(t(norm_data[,selected_genes_qt[sel_common]]), design)
+  
+#### Create contrast matrix
+cont.matrix <- makeContrasts(group1=non_tolerant-tolerant,
+                             group2=tolerant-non_tolerant,
+                             levels=design)
+#cont.matrix
+fit2 = contrasts.fit(fit, cont.matrix)
+
+#### Moderate T-test with 'shrunken' se
+fit.eb <- eBayes(fit2)
+
+
+allGenesGroup1<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=1)
+DEgenesGroup1<-getDEgenes(allGenesGroup1,1,0)
+
+#length(which(selected_genes_qt[sel_common] %in% rownames(DEgenesGroup1)))
+
+# add them to the table
+
+DEgenesGroup1 <- DEgenesGroup1[as.character(annot_genes$`selected_genes_qt[sel_common]`),] 
+annot_genes <- cbind(annot_genes, DEgenesGroup1)
+
+# add the information on correlated genes to the table
+
+for( i in which(comp_sizes != 0)){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  v_names <- c(vertex_names, rep(0, nrow(annot_genes) - length(vertex_names)))
+  annot_genes <- cbind(annot_genes, v_names)
+}
+write.xlsx(annot_genes, file = "../data/RNAseq/recip_only/annot_408selected_genes_recip_TNT_90.xlsx")
+```
+
+
+We can also see how many of these genes had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients)
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_genes_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/RNAseq/recip_only/perm_val_dir_TNT_90_thresh.xlsx")
+```
+
+We can see if the features that had the same behaviour in both cohorts correspond to
+the genes that had been found through differential analysis:
+```{r, echo = FALSE}
+sel_beh <- read.xlsx("../data/RNAseq/recip_only/perm_val_beh_TNT_90_thresh.xlsx")
+selb <- as.character(sel_beh$sel_beh)
+
+print(paste0(length(which(allDEgenes %in% selb)), " out of the ", 
+       length(allDEgenes), 
+       " genes that were identified as differentially expressed were retrieved with our feature selection method."))
+allDEgenes[which(allDEgenes %in% selb)]
+```
+
+Graph of the 278 selected genes that had the same behaviour in the two cohorts:
+```{r, echo = FALSE}
+plot_correlations(ft_df = norm_data[,c("group",selb)],
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNA_seq_national/recip_only/rna_recip_cryo_TNT_90.RData",
+                  compar = "TNT", pval_threshold = 0.001)
+```
+
+
+I save the 278 features in an excel file:
+The excel file contains information on which features were correlated in the graph above.
+It also contains, for every gene, the associated logFC, pvalue..., where the comparison 
+is in non tolerant versus tolerant patients (eg, a positive Fold Change for a gene 
+therefore means that the gene is overexpressed in non tolrant patients)
+```{r, echo = FALSE}
+rna_recip_louis_beh_TNT_90 <- norm_data[,c("group", selb)]
+save(rna_recip_louis_beh_TNT_90,
+     file = "../data/RNAseq/recip_only/rna_recip_louis_beh_TNT_90.RData")
+
+# Identify connected components in the graph:
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                 min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(selb)
+
+DEgenesGroup1b <- DEgenesGroup1[as.character(annot_genes$selb),]
+annot_genes <- cbind(annot_genes, DEgenesGroup1b)
+
+# add the information on correlated genes to the table
+
+for( i in which(comp_sizes != 0)){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  v_names <- c(vertex_names, rep(0, nrow(annot_genes) - length(vertex_names)))
+  annot_genes <- cbind(annot_genes, v_names)
+}
+write.xlsx(annot_genes, file = "../data/RNAseq/recip_only/annot_278selected_genes_recip_TNT_90.xlsx")
+```
+
+Now that we have selected features that should help us classify tolerant and 
+non tolerant recipients, we can see that a RF model built on the 408 selected
+features is slightly better than the one built on all genes:
+```{r, echo = FALSE, eval = FALSE}
+set.seed(1)
+rf <- rf_tol_non_tol(df_orig = rna_recip_louis_TNT_90, ntree = 5000)
+rf
+```
+
+We can also try to use only the features that were common and behaved similarly
+in the two cohorts, we can also build a classifier on these 278 features. But 
+the RF model built on the 278 selected features isn't better than the one built 
+on the 408 common genes:
+```{r, echo = FALSE, eval = FALSE}
+set.seed(1)
+rf <- rf_tol_non_tol(df_orig = rna_recip_louis_beh_TNT_90, ntree = 5000)
+rf
+```
+
+
+#### Including gender compatibility and age recip in the feature selection
+
+Now that we have selected metabolites that seemed to play a role in tolerance that 
+were common to both cohorts (with a threhold over 0.90), we decide to 
+investigate into these metabolites to see if some of them are related to the age
+of the recipients, to the gender compatibility between the donor and recipient,
+to both or to none of these two causes.
+
+I first build new models using the metabolites that were kept in the 
+two cohorts as informative when comparing tolerant and non tolerant patients: 
+
+FOR NOW, I ONLY PLOT THE 0.95 BEH FEATURES
+```{r}
+sel_beh <- read.xlsx("../data/RNAseq/recip_only/perm_val_beh_TNT_90_thresh.xlsx")
+selb <- as.character(sel_beh$sel_beh)
+
+new_models <- lapply(seq_along(selb), function(idx){
+  dta_tmp <- norm_data[,c(selb[idx],
+                        "group", "age_recip", "gender_comp")]
+  colnames(dta_tmp)[1] <- "Var"
+  fit1 <- glm(group ~ Var, data=dta_tmp,trace=F, family = "binomial")
+  fit2 <- glm(group ~ gender_comp + Var,
+              data=dta_tmp,trace=F, family = "binomial")
+  fit3 <- glm(group ~ age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  fit4 <- glm(group ~ gender_comp + age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  list(fit1, fit2, fit3, fit4)
+})
+```
+
+
+```{r, eval = FALSE}
+plots_gender_age2(pdf_name = "../plots/rnaseq/recip/age_and_gender/tol_nontol_0.90.pdf",
+                 norm_data = norm_data,
+                 features = selb, compar = "TNT",
+                 excel_name = "../plots/rnaseq/recip/age_and_gender/tol_nontol_0.90.xlsx")
+
+```
+
+
+
+
+### Identifying features that vary the most between primary and secondary tolerant recipients:
+
+Run the permutation distribution, taking demographic variables into account:
+I first add the age and gender compatibility information to the data.
+```{r, echo = FALSE}
+recip_info <- couple_info %>%  
+  dplyr::filter(grepl("R", rownames(couple_info))) 
+
+norm_data <- norm_data_3gr %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  left_join(recip_info %>% dplyr::select(Id.Cryostem.R, gender_comp, age_recip),
+            by = "Id.Cryostem.R") %>% 
+  column_to_rownames("Id.Cryostem.R")
+```
+
+And then compute the permutation distribution for the non vs tolerance:
+```{r, eval=FALSE, echo = FALSE}
+norm_data <- norm_data %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(group != "non_tolerant") %>% 
+  mutate(group = as.factor(as.character(group))) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+perm_vals_PRISM(norm_data = norm_data, 
+                PRISM_name = "rnaseq_r_PS",
+                rds_name = "handle_louis_rna_r_PS.rds")
+
+handle3 <- readRDS("handle_louis_rna_r_PS.rds")
+perm_vals <- qsub_retrieve(handle3)
+
+save(perm_vals, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/perm_vals_PS.RData")
+save(norm_data, file= "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/norm_data_PS.RData")
+```
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/perm_vals_PS.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/recip_only/norm_data_PS.RData")
+
+gr_medians <- norm_data %>%
+  group_by(group) %>%
+  summarize_if(is.numeric, median) %>%
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+#### Threshold of 0.95
+
+These genes were selected as informative to classify the non and tolerant 
+recipients, with a 0.95 threshold:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+densityplot(qt)
+selected_genes_qt <- colnames(norm_data)[which(qt>.95)+1]
+write.xlsx(selected_genes_qt, file = "../data/RNAseq/recip_only/perm_val_PS_95_thresh.xlsx")
+print(paste0(length(selected_genes_qt),
+             " genes were above the 0.95 threshold in the St Louis cohort."))
+```
+
+Which of these selected genes are common with the Cryostem cohort?
+```{r, echo = FALSE}
+sel_cryo <- read.xlsx("../data/RNA_seq_national/recip_only/perm_val_PS_95_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_genes_qt %in% sel_cryo$X1)
+print(paste0(length(sel_common), " genes were common between the two cohorts: "))
+print(selected_genes_qt[sel_common])
+# selected_genes_qt[sel_common]
+```
+
+I save the 3 features in an excel file:
+The excel file contains, for every gene, the associated logFC, pvalue..., where 
+the comparison is in primary versus secondary tolerant patients (eg, a positive 
+Fold Change for a gene therefore means that the gene is overexpressed in primary 
+tolerant patients)
+```{r, echo = FALSE}
+rna_recip_louis_PS_95 <- norm_data[,c("group", selected_genes_qt[sel_common])]
+save(rna_recip_louis_PS_95,
+     file = "../data/RNAseq/recip_only/rna_recip_louis_PS_95.RData")
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(selected_genes_qt[sel_common])
+
+# Compute the FC and pvalues:
+TS <- colData[rownames(norm_data),] %>% 
+  dplyr::select(GROUP) %>% 
+  mutate(GROUP = tolower(GROUP))
+TS <- TS$GROUP
+
+TS <- factor(TS, levels=unique(TS))
+design <- model.matrix(~0+TS)
+colnames(design) <- levels(TS)
+#design
+fit <- lmFit(t(norm_data[,selected_genes_qt[sel_common]]), design)
+  
+#### Create contrast matrix
+cont.matrix <- makeContrasts(group1=primary_tolerant-secondary_tolerant,
+                             group2=secondary_tolerant-primary_tolerant,
+                             levels=design)
+#cont.matrix
+fit2 = contrasts.fit(fit, cont.matrix)
+
+#### Moderate T-test with 'shrunken' se
+fit.eb <- eBayes(fit2)
+
+
+allGenesGroup1<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=1)
+DEgenesGroup1<-getDEgenes(allGenesGroup1,1,0)
+
+# length(which(selected_genes_qt[sel_common] %in% rownames(DEgenesGroup1)))
+
+# add them to the table
+
+DEgenesGroup1 <- DEgenesGroup1[as.character(annot_genes$`selected_genes_qt[sel_common]`),] 
+annot_genes <- cbind(annot_genes, DEgenesGroup1)
+
+write.xlsx(annot_genes, file = "../data/RNAseq/recip_only/annot_3selected_genes_recip_PS_95.xlsx")
+```
+
+
+We can also see how many of these genes had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients)
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_genes_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/RNAseq/recip_only/perm_val_dir_PS_95_thresh.xlsx")
+```
+
+I save this feature:
+```{r, echo = FALSE}
+sel_beh <- read.xlsx("../data/RNAseq/recip_only/perm_val_beh_PS_95_thresh.xlsx")
+selb <- sel_beh$sel_beh
+rna_recip_louis_beh_PS_95 <- norm_data[,c("group", selb)]
+save(rna_recip_louis_beh_PS_95,
+     file = "../data/RNAseq/recip_only/rna_recip_louis_beh_PS_95.RData")
+
+annot_genes <- as.data.frame(selb)
+
+DEgenesGroup1b <- DEgenesGroup1[as.character(annot_genes$selb),]
+annot_genes <- cbind(annot_genes, DEgenesGroup1b)
+
+write.xlsx(annot_genes, file = "../data/RNAseq/recip_only/annot_1selected_gene_recip_PS_95.xlsx")
+```
+
+
+Now that we have selected features that should help us classify non and 
+tolerant recipients, we can see that a RF model built on these selected
+features gives slightly better results than the one built on all features:
+```{r, echo = FALSE, eval = FALSE}
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_recip_louis_PS_95, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+
+#### Threshold of 0.90
+
+These genes were selected as informative to classify the non and tolerant 
+recipients, with a 0.90 threshold:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+densityplot(qt)
+selected_genes_qt <- colnames(norm_data)[which(qt>.90)+1]
+write.xlsx(selected_genes_qt, file = "../data/RNAseq/recip_only/perm_val_PS_90_thresh.xlsx")
+print(paste0(length(selected_genes_qt),
+             " genes were above the 0.95 threshold in the Cryostem cohort."))
+```
+
+Which of these selected genes are common with the Cryostem cohort?
+```{r}
+sel_cryo <- read.xlsx("../data/RNA_seq_national/recip_only/perm_val_PS_90_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_genes_qt %in% sel_cryo$X1)
+print(paste0(length(sel_common), " genes were common between the two cohorts."))
+# selected_genes_qt[sel_common]
+```
+
+Graph of these selected genes that were found commonly between the two cohorts:
+```{r, echo = FALSE}
+correlations <- norm_data[,selected_genes_qt[sel_common]] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selected_genes_qt[sel_common])
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#0000FF80", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#00FF0080"
+  }
+}
+
+# recip_path <- "~/Desktop/"
+# 
+# pdf(paste0(recip_path, "cryo_common_metabolites_recip_05.pdf"), width = 12, height = 8)
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+
+I save the 45 features in an excel file:
+The excel file contains information on which features were correlated in the graph above.
+It also contains, for every gene, the associated logFC, pvalue..., where the comparison 
+is in non tolerant versus tolerant patients (eg, a positive Fold Change for a gene 
+therefore means that the gene is overexpressed in non tolrant patients)
+```{r, echo = FALSE}
+rna_recip_louis_PS_90 <- norm_data[,c("group", selected_genes_qt[sel_common])]
+save(rna_recip_louis_PS_90,
+     file = "../data/RNAseq/recip_only/rna_recip_louis_PS_90.RData")
+
+# Identify connected components in the graph:
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                 min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(selected_genes_qt[sel_common])
+
+# Compute the FC and pvalues:
+TS <- colData[rownames(norm_data),] %>% 
+  dplyr::select(GROUP) %>% 
+  mutate(GROUP = tolower(GROUP))
+TS <- TS$GROUP
+
+TS <- factor(TS, levels=unique(TS))
+design <- model.matrix(~0+TS)
+colnames(design) <- levels(TS)
+#design
+fit <- lmFit(t(norm_data[,selected_genes_qt[sel_common]]), design)
+  
+#### Create contrast matrix
+cont.matrix <- makeContrasts(group1=primary_tolerant-secondary_tolerant,
+                             group2=secondary_tolerant-primary_tolerant,
+                             levels=design)
+#cont.matrix
+fit2 = contrasts.fit(fit, cont.matrix)
+
+#### Moderate T-test with 'shrunken' se
+fit.eb <- eBayes(fit2)
+
+
+allGenesGroup1<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=1)
+DEgenesGroup1<-getDEgenes(allGenesGroup1,1,0)
+
+#length(which(selected_genes_qt[sel_common] %in% rownames(DEgenesGroup1)))
+
+# add them to the table
+
+DEgenesGroup1 <- DEgenesGroup1[as.character(annot_genes$`selected_genes_qt[sel_common]`),] 
+annot_genes <- cbind(annot_genes, DEgenesGroup1)
+
+# add the information on correlated genes to the table
+
+for( i in which(comp_sizes != 0)){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  v_names <- c(vertex_names, rep(0, nrow(annot_genes) - length(vertex_names)))
+  annot_genes <- cbind(annot_genes, v_names)
+}
+write.xlsx(annot_genes, file = "../data/RNAseq/recip_only/annot_45selected_genes_recip_PS_90.xlsx")
+```
+
+We can also see how many of these genes had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients)
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_genes_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/RNAseq/recip_only/perm_val_dir_PS_90_thresh.xlsx")
+```
+
+Graph of the 24 genes that were found commonly in the two cohorts AND had the
+same behaviour in the two cohorts:
+```{r}
+sel_beh <- read.xlsx("../data/RNAseq/recip_only/perm_val_beh_PS_90_thresh.xlsx")
+selb <- as.character(sel_beh$sel_beh)
+
+plot_correlations(ft_df = norm_data[,c("group",selb)],
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNA_seq_national/recip_only/rna_recip_cryo_PS_90.RData",
+                  compar = "PS", pval_threshold = 0.01)
+```
+
+I save the 24 features in an excel file:
+The excel file contains information on which features were correlated in the graph above.
+It also contains, for every gene, the associated logFC, pvalue..., where the comparison 
+is in non tolerant versus tolerant patients (eg, a positive Fold Change for a gene 
+therefore means that the gene is overexpressed in non tolrant patients)
+```{r, echo = FALSE}
+rna_recip_louis_beh_PS_90 <- norm_data[,c("group", selb)]
+save(rna_recip_louis_beh_PS_90,
+     file = "../data/RNAseq/recip_only/rna_recip_louis_beh_PS_90.RData")
+
+# Identify connected components in the graph:
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                 min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(selb)
+
+DEgenesGroup1b <- DEgenesGroup1[as.character(annot_genes$selb),]
+annot_genes <- cbind(annot_genes, DEgenesGroup1b)
+
+# add the information on correlated genes to the table
+
+for( i in which(comp_sizes != 0)){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  v_names <- c(vertex_names, rep(0, nrow(annot_genes) - length(vertex_names)))
+  annot_genes <- cbind(annot_genes, v_names)
+}
+write.xlsx(annot_genes, file = "../data/RNA_seq_national/recip_only/annot_24selected_genes_recip_PS_90.xlsx")
+```
+
+Now that we have selected features that should help us classify tolerant and 
+non tolerant recipients, we can see that a RF model built on these selected
+features is slightly better than the one built on all genes:
+```{r, eval = FALSE, echo = FALSE}
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_recip_louis_PS_90, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+We can also try to use only the features that were common and behaved similarly
+in the two cohorts (24 features) . But the RF model built on the 24 selected 
+features isn't better than the one built on the 45 common genes:
+```{r, echo = FALSE, eval = FALSE}
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_recip_louis_beh_PS_90, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+#### Including gender compatibility and age recip in the feature selection
+
+Now that we have selected metabolites that seemed to play a role in tolerance that 
+were common to both cohorts (with a threhold over 0.90), we decide to 
+investigate into these metabolites to see if some of them are related to the age
+of the recipients, to the gender compatibility between the donor and recipient,
+to both or to none of these two causes.
+
+I first build new models using the metabolites that were kept in the 
+two cohorts as informative when comparing tolerant and non tolerant patients: 
+
+FOR NOW, I ONLY PLOT THE 0.95 BEH FEATURES
+```{r}
+new_models <- lapply(seq_along(selb), function(idx){
+  dta_tmp <- norm_data[,c(selb[idx],
+                        "group", "age_recip", "gender_comp")]
+  colnames(dta_tmp)[1] <- "Var"
+  fit1 <- glm(group ~ Var, data=dta_tmp,trace=F, family = "binomial")
+  fit2 <- glm(group ~ gender_comp + Var,
+              data=dta_tmp,trace=F, family = "binomial")
+  fit3 <- glm(group ~ age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  fit4 <- glm(group ~ gender_comp + age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  list(fit1, fit2, fit3, fit4)
+})
+```
+
+
+```{r, eval = FALSE}
+plots_gender_age2(pdf_name = "../plots/rnaseq/recip/age_and_gender/prim_sec_0.90.pdf",
+                 norm_data = norm_data,
+                 features = selb, compar = "PTST",
+                 excel_name = "../plots/rnaseq/recip/age_and_gender/prim_sec_0.90.xlsx")
+
+```
+
+
+
+
+# Analysis on the donors only :
+
+```{r preproc_donors, echo=FALSE, eval = FALSE}
+counts <- countData[,c(donor_id)]
+
+count_nb <- apply(counts,2,as.numeric) # turn characters into numerics
+rownames(count_nb) <- rownames(counts) # restore the rownmes which were lost in the transfo
+counts <- count_nb
+
+### Preprocessing
+y <- DGEList(counts = counts)
+keep = rowSums(cpm(y)>1) >= 3
+y = y[keep,]
+dim(y) # from 69000 genes to 18000 genes after this filter
+
+# Reset lib sizes
+y$samples$lib.size = colSums(y$counts)
+```
+
+The names of the genes are in the ensembl ID format. When possible, I replace them with the associated gene symbol:
+```{r, eval = FALSE, echo = FALSE}
+##CONVERT ENSEMBL GENE NAME TO ENTREZID & SYMBOL
+hgnc_symbol <- convertIDs( rownames(y$counts), "ENSEMBL", "SYMBOL", org.Hs.eg.db )
+
+counts_gene_symbol <- y$counts
+names_2change <- hgnc_symbol[-which(is.na(hgnc_symbol))]
+names_2keep_idx <- which(is.na(hgnc_symbol))
+dupp <- names_2change[which(duplicated(names_2change))]
+dupp_idx <- which(hgnc_symbol %in% dupp)[c(T,F)]
+final_ids_2keep <- c(names_2keep_idx, dupp_idx)
+
+rownames(counts_gene_symbol)[-final_ids_2keep] <- hgnc_symbol[-final_ids_2keep]
+
+y$counts <- counts_gene_symbol
+```
+Perform normalisation and initiate the design matrix (per group)
+
+```{r, eval = FALSE, echo = FALSE}
+# compute norm_factors
+normfac <- calcNormFactors(y, method = "TMM")
+
+#### Create design matrix
+# for the three groups :
+patient_groups <- tolower(colData$GROUP)
+TS <- patient_groups[c(donor_id)]
+
+TS <- factor(TS, levels=unique(TS))
+design <- model.matrix(~0+TS)
+colnames(design) <- levels(TS)
+design
+
+#voom
+#In limma, read counts are converted to log2-counts-per-million (logCPM) and
+#the mean-variance relationship is modelled either with precision weights or
+#with an empirical Bayes prior trend. The precision weights approach is called “voom”
+# lib.size <- counts$samples$lib.size * counts$samples$norm.factors
+# E <- t(log2(t(counts + 0.5)/(lib.size + 1) * 1e+06))
+v <- voom(y, design, plot = TRUE)
+expTable<-v$E
+```
+
+Save the produced objects:
+
+```{r, eval = FALSE, echo = FALSE}
+DE_list <- list(v, y, design)
+
+save(expTable, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/expression_table_donors.RData")
+save(DE_list, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/data_for_DE_donors.RData")
+```
+
+Load the produced data :
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/expression_table_donors.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/data_for_DE_donors.RData")
+```
+
+### Differential Analysis 
+
+Fit a model to the design:
+```{r, echo = FALSE}
+names(DE_list) <- c("v", "y", "design")
+fit <- lmFit(DE_list$v, DE_list$design)
+
+#### Create contrast matrix
+cont.matrix <- makeContrasts(group1=non_tolerant-primary_tolerant,
+                             group2=non_tolerant-secondary_tolerant,
+                             group3=primary_tolerant-secondary_tolerant,
+                             levels=DE_list$design)
+cont.matrix
+fit2 = contrasts.fit(fit, cont.matrix)
+
+#### Moderate T-test with 'shrunken' se
+fit.eb <- eBayes(fit2)
+```
+
+Adjust the pvalues for multiple testing :
+```{r, echo = FALSE}
+#### Adjust P-values via Benjamini-Hochberg
+##### 1. non-tol vs tol-1
+allGenesGroup1<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=1)
+DEgenesGroup1<-getDEgenes(allGenesGroup1,0.05,1)
+paste0("Non tolerant vs primary: ", dim(DEgenesGroup1)[1])
+##84
+
+##### 2. non-tol vs tol-2
+allGenesGroup2<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=2)
+DEgenesGroup2<-getDEgenes(allGenesGroup2,0.05,1)
+paste0("Non tolerant vs secondary: ", dim(DEgenesGroup2)[1])
+##57
+
+##### 3. tol-1 vs tol-2
+allGenesGroup3<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=3)
+DEgenesGroup3<-getDEgenes(allGenesGroup3,0.05,1)
+paste0("Primary vs secondary: ", dim(DEgenesGroup3)[1])
+##0
+```
+
+### Machine learning approach :
+
+filter out lowly variable genes:
+
+```{r, echo = FALSE}
+sds <- apply(expTable,1,sd)
+plot(sort(sds), type = "l")
+abline(h=quantile(sds, 0.5), col="red")
+expT <- expTable[which(sds>=quantile(sds, 0.5)),]
+rnames <- rownames(expT)
+expT <- apply(expT,2,as.numeric)
+rownames(expT) <- rnames
+```
+
+Prepare the data:
+```{r, cache=FALSE, results='hide', warning=FALSE, comment=FALSE, warning=FALSE, message = FALSE, include=FALSE, echo = FALSE}
+colData<-read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+colData <- colData[!is.na(colData$RNAseq.ID),] # remove rows with no RNAseq sample
+rownames(colData) <- colData$Id.Cryostem.R
+colnames(colData)[which(colnames(colData)=="RNA.INTEGRITY.NUMBER.(RIN)")] <- "RNA.INTEGRITY"
+
+norm_data <- t(expT)
+patient_groups <- tolower(colData$GROUP)
+group <- patient_groups[c(donor_id)]
+norm_data <- as.data.frame(norm_data) %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(group = group) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  dplyr::select(group, rownames(expT))
+norm_data[,1] <- as.factor(norm_data[,1])
+colnames(norm_data) <- make.names(colnames(norm_data))
+
+norm_data_3gr_d <- norm_data
+```
+
+We perform a PCA on the donors to see if we already observe some structure 
+in the data, and if there isn't too much batch effect:
+```{r, echo = FALSE}
+colData_donor <- colData[c(donor_id),] %>% 
+  mutate(GROUP = tolower(GROUP))
+
+pca <- prcomp(norm_data[,-1])
+
+pca_2plot <- as.data.frame(pca$x) %>% 
+  mutate(Id.Cryostem.R = rownames(pca$x)) %>% 
+  left_join(colData_donor, by = "Id.Cryostem.R")
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(GROUP), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(RNAseq.RUN), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.numeric(RNA.INTEGRITY), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+
+```
+We don't observe much structure, relatively to the tolerance groups, or batches.
+
+We can try to build a random forest model using all the genes of the 
+donors:
+```{r, echo = FALSE, eval = FALSE}
+set.seed(1)
+rf_donor <- ranger::ranger(group~., norm_data, mtry = 40, num.trees = 1000,
+                           importance = "impurity")
+rf_donor$confusion.matrix
+rf_donor$prediction.error*100
+```
+
+But it seems like the data doesn't allow us to classify into the three tolerance
+groups. We can try to simplify the classification problem:
+
+First, we try to separate tolerant from non tolerant donors:
+```{r, eval = FALSE}
+set.seed(1)
+rf <- rf_tol_non_tol(df_orig = norm_data, ntree = 5000)
+rf
+```
+
+Second, we can try to classify primary tolerant from secondary tolerant donors:
+```{r, eval = FALSE}
+set.seed(1)
+rf <- rf_tol1_tol2(df_orig = norm_data, ntree = 5000)
+rf
+```
+But the error rates are still very high, even after splitting the classification 
+problem in two.
+
+## Feature selection
+
+### Identifying features that vary the most between non and tolerant donors:
+
+Run the permutation distribution, taking demographic variables into account:
+I first add the age and gender compatibility information to the data.
+```{r, echo = FALSE}
+donor_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(grepl("D", rownames(couple_info))) 
+
+norm_data <- norm_data_3gr_d %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  left_join(donor_info %>% dplyr::select(Id.Cryostem.R, gender_comp, age_recip),
+            by = "Id.Cryostem.R") %>% 
+  column_to_rownames("Id.Cryostem.R")
+```
+
+And then compute the permutation distribution for the non vs tolerance:
+```{r, eval=FALSE}
+norm_data$group <- as.character(norm_data$group)
+norm_data$group[which(norm_data$group!="non_tolerant")] <- "tolerant"
+norm_data$group <- as.factor(norm_data$group)
+
+perm_vals_PRISM(norm_data = norm_data, PRISM_name = "rnaseq_d_TNT",
+                rds_name = "handle_louis_rna_d_TNT.rds")
+
+handle3 <- readRDS("handle_louis_rna_d_TNT.rds")
+perm_vals <- qsub_retrieve(handle3)
+
+save(perm_vals, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/perm_vals_TNT.RData")
+save(norm_data, file= "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/norm_data_TNT.RData")
+```
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/perm_vals_TNT.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/norm_data_TNT.RData")
+
+gr_medians <- norm_data %>%
+  group_by(group) %>%
+  summarize_if(is.numeric, median) %>%
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+#### Threshold of 0.95
+
+These genes were selected as informative to classify the non and tolerant 
+recipients, with a 0.95 threshold:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+densityplot(qt)
+selected_genes_qt <- colnames(norm_data)[which(qt>.95)+1]
+write.xlsx(selected_genes_qt, file = "../data/RNAseq/donors_only/perm_val_TNT_95_thresh.xlsx")
+print(paste0(length(selected_genes_qt),
+             " genes were abonve the 0.95 threshold in the St Louis cohort."))
+```
+
+Which of these selected genes are common with the Cryostem cohort?
+```{r}
+sel_cryo <- read.xlsx("../data/RNA_seq_national/donors_only/perm_val_TNT_95_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_genes_qt %in% sel_cryo$X1)
+print(paste0(length(sel_common), " genes were common between the two cohorts."))
+# selected_genes_qt[sel_common]
+```
+
+Graph of these selected genes that were found commonly between the two cohorts:
+```{r, echo = FALSE}
+correlations <- norm_data[,selected_genes_qt[sel_common]] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selected_genes_qt[sel_common])
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#0000FF80"
+  }
+}
+
+# recip_path <- "~/Desktop/"
+# 
+# pdf(paste0(recip_path, "cryo_common_metabolites_recip_05.pdf"), width = 12, height = 8)
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+
+I save these features:
+```{r, echo = FALSE}
+rna_donor_louis_TNT_95 <- norm_data[,c("group", selected_genes_qt[sel_common])]
+save(rna_donor_louis_TNT_95,
+     file = "../data/RNAseq/donors_only/rna_donor_louis_TNT_95.RData")
+
+# Identify connected components in the graph:
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                 min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(selected_genes_qt[sel_common])
+
+# Compute the FC and pvalues:
+patient_groups <- tolower(colData$GROUP)
+patient_groups[which(patient_groups != "non_tolerant")] <- "tolerant"
+TS <- patient_groups[c(donor_id)]
+
+TS <- factor(TS, levels=unique(TS))
+design <- model.matrix(~0+TS)
+colnames(design) <- levels(TS)
+#design
+fit <- lmFit(t(norm_data[,selected_genes_qt[sel_common]]), design)
+  
+#### Create contrast matrix
+cont.matrix <- makeContrasts(group1=non_tolerant-tolerant,
+                             group2=tolerant-non_tolerant,
+                             levels=design)
+#cont.matrix
+fit2 = contrasts.fit(fit, cont.matrix)
+
+#### Moderate T-test with 'shrunken' se
+fit.eb <- eBayes(fit2)
+
+
+allGenesGroup1<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=1)
+DEgenesGroup1<-getDEgenes(allGenesGroup1,1,0)
+
+# length(which(selected_genes_qt[sel_common] %in% rownames(DEgenesGroup1)))
+
+# add them to the table
+
+DEgenesGroup1 <- DEgenesGroup1[as.character(annot_genes$`selected_genes_qt[sel_common]`),] 
+annot_genes <- cbind(annot_genes, DEgenesGroup1)
+
+
+for( i in which(comp_sizes != 0)){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  v_names <- c(vertex_names, rep(0, nrow(annot_genes) - length(vertex_names)))
+  annot_genes <- cbind(annot_genes, v_names)
+}
+write.xlsx(annot_genes, file = "../data/RNAseq/donors_only/annot_70selected_genes_donor_TNT_95.xlsx")
+```
+
+
+We can see how many of these genes had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients)
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_genes_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/RNAseq/donors_only/perm_val_dir_TNT_95_thresh.xlsx")
+```
+
+
+I save the 5 features that had the same behaviouir in the 2 cohorts in an excel file:
+The excel file contains information on which features were correlated in the graph above.
+It also contains, for every gene, the associated logFC, pvalue..., where the comparison 
+is in non tolerant versus tolerant patients (eg, a positive Fold Change for a gene 
+therefore means that the gene is overexpressed in non tolerant patients)
+```{r, echo = FALSE}
+sel_beh <- read.xlsx("../data/RNAseq/donors_only/perm_val_beh_TNT_95_thresh.xlsx")
+selb <- sel_beh$sel_beh
+rna_donor_louis_beh_TNT_95 <- norm_data[,c("group", selb)]
+save(rna_donor_louis_beh_TNT_95,
+     file = "../data/RNAseq/donors_only/rna_donor_louis_beh_TNT_95.RData")
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(selb)
+
+DEgenesGroup1b <- DEgenesGroup1[as.character(annot_genes$selb),]
+annot_genes <- cbind(annot_genes, DEgenesGroup1b)
+
+write.xlsx(annot_genes, file = "../data/RNAseq/donors_only/annot_5selected_genes_donor_TNT_95.xlsx")
+```
+
+Now that we have selected features that should help us classify non and 
+tolerant donorients, we can see that a RF model built on these selected
+features gives slightly better results than the one built on all features:
+```{r, eval = FALSE}
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_donor_louis_TNT_95, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+We can also try to use only the features that were common and behaved similarly
+in the two cohorts, we can also build a classifier on these 111 features. But 
+the RF model built on the 5 selected features isn't better than the one built 
+on the 70 common genes:
+```{r, echo = FALSE, eval = FALSE}
+set.seed(1)
+rf <- rf_tol_non_tol(df_orig = rna_donor_louis_beh_TNT_95, ntree = 5000)
+rf
+```
+
+#### Threshold of 0.90
+
+These genes were selected as informative to classify the non and tolerant 
+recipients, with a 0.90 threshold:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+densityplot(qt)
+selected_genes_qt <- colnames(norm_data)[which(qt>.90)+1]
+write.xlsx(selected_genes_qt, file = "../data/RNAseq/donors_only/perm_val_TNT_90_thresh.xlsx")
+print(paste0(length(selected_genes_qt),
+             " genes were abonve the 0.90 threshold in the St Louis cohort."))
+```
+
+Which of these selected genes are common with the Cryostem cohort?
+```{r, echo = FALSE}
+sel_cryo <- read.xlsx("../data/RNA_seq_national/donors_only/perm_val_TNT_90_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_genes_qt %in% sel_cryo$X1)
+print(paste0(length(sel_common), " genes were common between the two cohorts."))
+# selected_genes_qt[sel_common]
+```
+
+Graph of these selected genes that were found commonly between the two cohorts:
+```{r}
+correlations <- norm_data[,selected_genes_qt[sel_common]] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selected_genes_qt[sel_common])
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#0000FF80"
+  }
+}
+
+# recip_path <- "~/Desktop/"
+# 
+# pdf(paste0(recip_path, "cryo_common_metabolites_recip_05.pdf"), width = 12, height = 8)
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+
+I save these features:
+```{r, echo = FALSE}
+rna_donor_louis_TNT_90 <- norm_data[,c("group", selected_genes_qt[sel_common])]
+save(rna_donor_louis_TNT_90,
+     file = "../data/RNAseq/donors_only/rna_donor_louis_TNT_90.RData")
+
+# Identify connected components in the graph:
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                 min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(selected_genes_qt[sel_common])
+
+# Compute the FC and pvalues:
+patient_groups <- tolower(colData$GROUP)
+patient_groups[which(patient_groups != "non_tolerant")] <- "tolerant"
+TS <- patient_groups[c(donor_id)]
+
+TS <- factor(TS, levels=unique(TS))
+design <- model.matrix(~0+TS)
+colnames(design) <- levels(TS)
+#design
+fit <- lmFit(t(norm_data[,selected_genes_qt[sel_common]]), design)
+  
+#### Create contrast matrix
+cont.matrix <- makeContrasts(group1=non_tolerant-tolerant,
+                             group2=tolerant-non_tolerant,
+                             levels=design)
+#cont.matrix
+fit2 = contrasts.fit(fit, cont.matrix)
+
+#### Moderate T-test with 'shrunken' se
+fit.eb <- eBayes(fit2)
+
+
+allGenesGroup1<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=1)
+DEgenesGroup1<-getDEgenes(allGenesGroup1,1,0)
+
+# length(which(selected_genes_qt[sel_common] %in% rownames(DEgenesGroup1)))
+
+# add them to the table
+
+DEgenesGroup1 <- DEgenesGroup1[as.character(annot_genes$`selected_genes_qt[sel_common]`),] 
+annot_genes <- cbind(annot_genes, DEgenesGroup1)
+
+
+for( i in which(comp_sizes != 0)){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  v_names <- c(vertex_names, rep(0, nrow(annot_genes) - length(vertex_names)))
+  annot_genes <- cbind(annot_genes, v_names)
+}
+write.xlsx(annot_genes, file = "../data/RNAseq/donors_only/annot_310selected_genes_donor_TNT_90.xlsx")
+```
+
+
+We can see how many of these genes had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients)
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_genes_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/RNAseq/donors_only/perm_val_dir_TNT_90_thresh.xlsx")
+```
+
+
+Graph of the 22 selected genes that had the same behaviour in the two cohorts:
+```{r, echo = FALSE}
+sel_beh <- read.xlsx("../data/RNAseq/donors_only/perm_val_beh_TNT_90_thresh.xlsx")
+selb <- sel_beh$sel_beh
+
+gr <- plot_correlations(ft_df = norm_data[,c("group",selb)],
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNA_seq_national/donors_only/rna_donor_cryo_TNT_90.RData",
+                  compar = "TNT", pval_threshold = 0.001)
+```
+
+
+I save the 22 features in an excel file:
+The excel file contains information on which features were correlated in the graph above.
+It also contains, for every gene, the associated logFC, pvalue..., where the comparison 
+is in non tolerant versus tolerant patients (eg, a positive Fold Change for a gene 
+therefore means that the gene is overexpressed in non tolrant patients)
+```{r, echo = FALSE}
+rna_donor_louis_beh_TNT_90 <- norm_data[,c("group", selb)]
+save(rna_donor_louis_beh_TNT_90,
+     file = "../data/RNAseq/donors_only/rna_donor_louis_beh_TNT_90.RData")
+
+# Identify connected components in the graph:
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                 min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(selb)
+
+DEgenesGroup1b <- DEgenesGroup1[as.character(annot_genes$selb),]
+annot_genes <- cbind(annot_genes, DEgenesGroup1b)
+
+# add the information on correlated genes to the table
+
+for( i in which(comp_sizes != 0)){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  v_names <- c(vertex_names, rep(0, nrow(annot_genes) - length(vertex_names)))
+  annot_genes <- cbind(annot_genes, v_names)
+}
+write.xlsx(annot_genes, file = "../data/RNAseq/donors_only/annot_22selected_genes_donor_TNT_90.xlsx")
+```
+
+
+Now that we have selected features that should help us classify primary and 
+secondary tolerant recipients, we can see that a RF model built on these selected
+features is better than the one built on all genes:
+```{r, eval = FALSE}
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_donor_louis_TNT_90, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+We can do the same on the 22 genes that had the same behaviour in the two cohorts,
+but it doesn't return better results:
+```{r, eval = FALSE}
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_donor_louis_beh_TNT_90, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+#### Including gender compatibility and age recip in the feature selection
+
+Now that we have selected metabolites that seemed to play a role in tolerance that 
+were common to both cohorts (with a threhold over 0.90), we decide to 
+investigate into these metabolites to see if some of them are related to the age
+of the recipients, to the gender compatibility between the donor and recipient,
+to both or to none of these two causes.
+
+I first build new models using the metabolites that were kept in the 
+two cohorts as informative when comparing tolerant and non tolerant patients: 
+
+```{r}
+new_models <- lapply(seq_along(selb), function(idx){
+  dta_tmp <- norm_data[,c(selb[idx],
+                        "group", "age_recip", "gender_comp")]
+  colnames(dta_tmp)[1] <- "Var"
+  fit1 <- glm(group ~ Var, data=dta_tmp,trace=F, family = "binomial")
+  fit2 <- glm(group ~ gender_comp + Var,
+              data=dta_tmp,trace=F, family = "binomial")
+  fit3 <- glm(group ~ age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  fit4 <- glm(group ~ gender_comp + age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  list(fit1, fit2, fit3, fit4)
+})
+```
+
+
+```{r, eval = FALSE}
+plots_gender_age(pdf_name = "../plots/rnaseq/donors/age_and_gender/tol_nontol_0.90_behavior.pdf",
+                 norm_data = norm_data,
+                 features = selb)
+
+```
+
+
+
+### Identifying features that vary the most between primary and secondary tolerant donors:
+
+Run the permutation distribution, taking demographic variables into account:
+I first add the age and gender compatibility information to the data.
+```{r, echo = FALSE}
+donor_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(grepl("D", rownames(couple_info))) 
+
+norm_data <- norm_data_3gr_d %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  left_join(donor_info %>% dplyr::select(Id.Cryostem.R, gender_comp, age_recip),
+            by = "Id.Cryostem.R") %>% 
+  column_to_rownames("Id.Cryostem.R")
+```
+
+And then compute the permutation distribution for the non vs tolerance:
+```{r, eval=FALSE, echo = FALSE}
+norm_data <- norm_data %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(group != "non_tolerant") %>% 
+  mutate(group = as.factor(as.character(group))) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+perm_vals_PRISM(norm_data = norm_data, 
+                PRISM_name = "rnaseq_d_PS",
+                rds_name = "handle_louis_rna_d_PS.rds")
+
+handle3 <- readRDS("handle_louis_rna_d_PS.rds")
+perm_vals <- qsub_retrieve(handle3)
+
+save(perm_vals, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/perm_vals_PS.RData")
+save(norm_data, file= "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/norm_data_PS.RData")
+```
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/perm_vals_PS.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_only/norm_data_PS.RData")
+
+gr_medians <- norm_data %>%
+  group_by(group) %>%
+  summarize_if(is.numeric, median) %>%
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+#### Threshold of 0.95
+
+These genes were selected as informative to classify the non and tolerant 
+recipients, with a 0.95 threshold:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+densityplot(qt)
+selected_genes_qt <- colnames(norm_data)[which(qt>.95)+1]
+write.xlsx(selected_genes_qt, file = "../data/RNAseq/donors_only/perm_val_PS_95_thresh.xlsx")
+print(paste0(length(selected_genes_qt),
+             " genes were above the 0.90 threshold in the Cryostem cohort."))
+```
+
+Which of these selected genes are common with the Cryostem cohort?
+```{r, echo = FALSE}
+sel_cryo <- read.xlsx("../data/RNA_seq_national/donors_only/perm_val_PS_95_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_genes_qt %in% sel_cryo$X1)
+print(paste0(length(sel_common), " genes were common between the two cohorts."))
+# selected_genes_qt[sel_common]
+```
+
+Graph of these selected genes that were found commonly between the two cohorts:
+```{r, echo = FALSE}
+correlations <- norm_data[,selected_genes_qt[sel_common]] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selected_genes_qt[sel_common])
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#0000FF80", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#00FF0080"
+  }
+}
+
+# recip_path <- "~/Desktop/"
+# 
+# pdf(paste0(recip_path, "cryo_common_metabolites_recip_05.pdf"), width = 12, height = 8)
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selected_genes_qt[sel_common],
+                 path_obj = "../data/RNAseq/donors_only/rna_donor_louis_PS_95.RDS",
+                 compar_design = "PS",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_only/annot_26selected_genes_donor_PS_95.xlsx")
+```
+
+We can see how many of these genes had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients). I save the genes 
+information for the St Louis cohort:
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_genes_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/RNAseq/donors_only/perm_val_dir_PS_95_thresh.xlsx")
+dir_genes_louis <- dir_genes
+```
+
+Graph of the 6 features that had the same behaviour in both cohorts:
+```{r}
+sel_beh <- read.xlsx("../data/RNAseq/donors_only/perm_val_beh_PS_95_thresh.xlsx")
+selb <- sel_beh$sel_beh
+
+correlations <- norm_data[,selb] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selb)
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#0000FF80", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#00FF0080"
+  }
+}
+
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+```
+
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selb,
+                 path_obj = "../data/RNAseq/donors_only/rna_donor_louis_beh_PS_95.RDS",
+                 compar_design = "PS",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_only/annot_6selected_genes_donor_PS_95.xlsx")
+```
+
+
+Now that we have selected features that should help us classify primary and 
+secondary tolerant recipients, we can see that a RF model built on these selected
+features is better than the one built on all genes:
+```{r, echo = FALSE}
+rna_donor_louis_PS_95 <- readRDS("../data/RNAseq/donors_only/rna_donor_louis_PS_95.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_donor_louis_PS_95, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+We can also build a RF model using only the 6 genes that had the same behaviour
+in both cohorts, but the classification resutls are slightly worse: 
+```{r, echo = FALSE}
+rna_donor_louis_beh_PS_95 <- readRDS("../data/RNAseq/donors_only/rna_donor_louis_beh_PS_95.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_donor_louis_beh_PS_95, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+
+#### Threshold of 0.90
+
+These genes were selected as informative to classify the non and tolerant 
+recipients, with a 0.90 threshold:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+densityplot(qt)
+selected_genes_qt <- colnames(norm_data)[which(qt>.90)+1]
+write.xlsx(selected_genes_qt, file = "../data/RNAseq/donors_only/perm_val_PS_90_thresh.xlsx")
+print(paste0(length(selected_genes_qt),
+             " genes were above the 0.90 threshold in the Cryostem cohort."))
+```
+
+Which of these selected genes are common with the Cryostem cohort?
+```{r}
+sel_cryo <- read.xlsx("../data/RNA_seq_national/donors_only/perm_val_PS_90_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_genes_qt %in% sel_cryo$X1)
+print(paste0(length(sel_common), " genes were common between the two cohorts."))
+# selected_genes_qt[sel_common]
+```
+
+Graph of these selected genes that were found commonly between the two cohorts:
+```{r}
+correlations <- norm_data[,selected_genes_qt[sel_common]] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selected_genes_qt[sel_common])
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#0000FF80", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#00FF0080"
+  }
+}
+
+# recip_path <- "~/Desktop/"
+# 
+# pdf(paste0(recip_path, "cryo_common_metabolites_recip_05.pdf"), width = 12, height = 8)
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selected_genes_qt[sel_common],
+                 path_obj = "../data/RNAseq/donors_only/rna_donor_louis_PS_90.RDS",
+                 compar_design = "PS",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_only/annot_104selected_genes_donor_PS_90.xlsx")
+```
+
+We can see how many of these genes had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients). I save the genes 
+information for the St Louis cohort:
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_genes_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/RNAseq/donors_only/perm_val_dir_PS_90_thresh.xlsx")
+dir_genes_louis <- dir_genes
+```
+
+Graph of the 16 selected genes that had the same behaviour in the two cohorts:
+```{r, echo = FALSE}
+sel_beh <- read.xlsx("../data/RNAseq/donors_only/perm_val_beh_PS_90_thresh.xlsx")
+selb <- sel_beh$sel_beh
+
+gr <- plot_correlations(ft_df = norm_data[,c("group",selb)],
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNA_seq_national/donors_only/rna_donor_cryo_PS_90.RDS",
+                  compar = "PS", pval_threshold = 0.001)
+```
+
+
+I save the 16 features in an excel file:
+The excel file contains information on which features were correlated in the graph above.
+It also contains, for every gene, the associated logFC, pvalue..., where the comparison 
+is in non tolerant versus tolerant patients (eg, a positive Fold Change for a gene 
+therefore means that the gene is overexpressed in non tolrant patients)
+```{r, echo = FALSE}
+rna_donor_louis_beh_PTST_90 <- norm_data[,c("group", selb)]
+save(rna_donor_louis_beh_PTST_90,
+     file = "../data/RNAseq/donors_only/rna_donor_louis_beh_PTST_90.RData")
+
+# Identify connected components in the graph:
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                 min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+# Generate a new annotated excel table
+annot_genes <- as.data.frame(selb)
+
+# Compute the FC and pvalues:
+patient_groups <- tolower(colData_donor$GROUP)
+patient_groups <- patient_groups[which(patient_groups != "non_tolerant")]
+TS <- patient_groups
+
+TS <- factor(TS, levels=unique(TS))
+design <- model.matrix(~0+TS)
+colnames(design) <- levels(TS)
+#design
+fit <- lmFit(t(norm_data[,selb]), design)
+  
+#### Create contrast matrix
+cont.matrix <- makeContrasts(group1=primary_tolerant-secondary_tolerant,
+                             group2=secondary_tolerant-primary_tolerant,
+                             levels=design)
+#cont.matrix
+fit2 = contrasts.fit(fit, cont.matrix)
+
+#### Moderate T-test with 'shrunken' se
+fit.eb <- eBayes(fit2)
+
+
+allGenesGroup1<-topTable(fit.eb, adjust="BH", sort.by="P",number=Inf, coef=1)
+DEgenesGroup1<-getDEgenes(allGenesGroup1,1,0)
+
+# length(which(selected_genes_qt[sel_common] %in% rownames(DEgenesGroup1)))
+
+# add them to the table
+
+DEgenesGroup1 <- DEgenesGroup1[as.character(annot_genes$selb),] 
+annot_genes <- cbind(annot_genes, DEgenesGroup1)
+
+# add the information on correlated genes to the table
+
+for( i in which(comp_sizes != 0)){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  v_names <- c(vertex_names, rep(0, nrow(annot_genes) - length(vertex_names)))
+  annot_genes <- cbind(annot_genes, v_names)
+}
+write.xlsx(annot_genes, file = "../data/RNAseq/donors_only/annot_16selected_genes_donor_PTST_90.xlsx")
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selb,
+                 path_obj = "../data/RNAseq/donors_only/rna_donor_louis_beh_PS_90.RDS",
+                 compar_design = "PS",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_only/annot_16selected_genes_donor_PS_90.xlsx")
+```
+
+Now that we have selected features that should help us classify primary and 
+secondary tolerant recipients, we can see that a RF model built on these selected
+features is better than the one built on all genes:
+```{r}
+rna_donors_louis_PS_90 <- readRDS("../data/RNAseq/donors_only/rna_donor_louis_PS_90.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_donors_louis_PS_90, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+We can also build a RF only on the 16 genes that had the same behaviour in both
+cohorts, but this makes the classification slightly worse:
+```{r}
+rna_donors_louis_beh_PS_90 <- readRDS("../data/RNAseq/donors_only/rna_donor_louis_beh_PS_90.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_donors_louis_beh_PS_90, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+#### Including gender compatibility and age recip in the feature selection
+
+Now that we have selected metabolites that seemed to play a role in tolerance that 
+were common to both cohorts (with a threhold over 0.90), we decide to 
+investigate into these metabolites to see if some of them are related to the age
+of the recipients, to the gender compatibility between the donor and recipient,
+to both or to none of these two causes.
+
+I first build new models using the metabolites that were kept in the 
+two cohorts as informative when comparing tolerant and non tolerant patients: 
+
+FOR NOW, I ONLY PLOT THE 0.95 BEH FEATURES
+```{r}
+new_models <- lapply(seq_along(selb), function(idx){
+  dta_tmp <- norm_data[,c(selb[idx],
+                        "group", "age_recip", "gender_comp")]
+  colnames(dta_tmp)[1] <- "Var"
+  fit1 <- glm(group ~ Var, data=dta_tmp,trace=F, family = "binomial")
+  fit2 <- glm(group ~ gender_comp + Var,
+              data=dta_tmp,trace=F, family = "binomial")
+  fit3 <- glm(group ~ age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  fit4 <- glm(group ~ gender_comp + age_recip + Var, 
+              data=dta_tmp,trace=F, family = "binomial")
+  list(fit1, fit2, fit3, fit4)
+})
+```
+
+
+```{r, eval = FALSE}
+plots_gender_age(pdf_name = "../plots/rnaseq/donors/age_and_gender/prim_sec_0.90_behavior.pdf",
+                 norm_data = norm_data,
+                 features = selb)
+
+```
+
+
+
+
+
+# Analysis on the donors - recipients
+
+```{r preproc_d_r, echo=FALSE}
+counts <- countData[,c(donor_id, recip_id)]
+
+count_nb <- apply(counts,2,as.numeric) # turn characters into numerics
+rownames(count_nb) <- rownames(counts) # restore the rownmes which were lost in the transfo
+counts <- count_nb
+
+# Keep only the patients that form complete cases (donor + recipient)
+
+colData_rd <- colData[colnames(counts),]
+complete_couples <- colData_rd$COUPLENUMBER[which(duplicated(colData_rd$COUPLENUMBER))]
+counts <- counts[,which(colData_rd$COUPLENUMBER %in% complete_couples)]
+
+colData_rd <- colData_rd[colnames(counts),]
+
+### Preprocessing
+y <- DGEList(counts = counts)
+keep = rowSums(cpm(y)>1) >= 3
+y = y[keep,]
+dim(y) # from 69000 genes to 18000 genes after this filter
+
+# Reset lib sizes
+y$samples$lib.size = colSums(y$counts)
+```
+
+The names of the genes are in the ensembl ID format. When possible, I replace them with the associated gene symbol:
+```{r, eval = FALSE, echo = FALSE}
+##CONVERT ENSEMBL GENE NAME TO ENTREZID & SYMBOL
+hgnc_symbol <- convertIDs( rownames(y$counts), "ENSEMBL", "SYMBOL", org.Hs.eg.db )
+
+counts_gene_symbol <- y$counts
+names_2change <- hgnc_symbol[-which(is.na(hgnc_symbol))]
+names_2keep_idx <- which(is.na(hgnc_symbol))
+dupp <- names_2change[which(duplicated(names_2change))]
+dupp_idx <- which(hgnc_symbol %in% dupp)[c(T,F)]
+final_ids_2keep <- c(names_2keep_idx, dupp_idx)
+
+rownames(counts_gene_symbol)[-final_ids_2keep] <- hgnc_symbol[-final_ids_2keep]
+
+y$counts <- counts_gene_symbol
+```
+
+Perform normalisation and initiate the design matrix (per group)
+
+```{r, eval = FALSE, echo = FALSE}
+# compute norm_factors
+normfac <- calcNormFactors(y, method = "TMM")
+
+#### Create design matrix
+# for the three groups :
+TS <- tolower(colData_rd$GROUP)
+
+TS <- factor(TS, levels=unique(TS))
+design <- model.matrix(~0+TS)
+colnames(design) <- levels(TS)
+design
+
+#voom
+#In limma, read counts are converted to log2-counts-per-million (logCPM) and
+#the mean-variance relationship is modelled either with precision weights or
+#with an empirical Bayes prior trend. The precision weights approach is called “voom”
+# lib.size <- counts$samples$lib.size * counts$samples$norm.factors
+# E <- t(log2(t(counts + 0.5)/(lib.size + 1) * 1e+06))
+v <- voom(y, design, plot = TRUE)
+expTable<-v$E
+```
+
+Save the produced objects:
+
+```{r, eval = FALSE, echo = FALSE}
+DE_list <- list(v, y, design)
+
+save(expTable, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/expression_table_dr.RData")
+save(DE_list, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/data_for_DE_dr.RData")
+```
+
+Load the data :
+```{r, echo = FALSE}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/expression_table_dr.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/data_for_DE_dr.RData")
+
+big_mat <- as.data.frame(t(expTable)) %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  left_join(colData, by = "Id.Cryostem.R")
+
+#big_mat <- big_mat[which(duplicated(big_mat$COUPLENUMBER)),]
+
+vars2rm <- colnames(colData)[-c(1, 4)]
+big_mat2 <- big_mat %>%
+  group_by(COUPLENUMBER) %>%
+  dplyr::select(-vars2rm)
+
+subst <- big_mat2 %>%
+  summarise_if(is.numeric, ~.[1]-.[2])
+
+colData_tmp <- colData[big_mat2$Id.Cryostem.R,]
+colData_tmp$GROUP <- as.factor(tolower(colData_tmp$GROUP))
+colData_subst <- colData_tmp %>% 
+  arrange(COUPLENUMBER) %>% 
+  dplyr::select(c("GROUP", "COUPLENUMBER")) %>% 
+  unique()
+
+subst <- subst %>% 
+  mutate("couple" = paste0("couple_",COUPLENUMBER),
+         "group" = colData_subst$GROUP) %>% 
+  column_to_rownames("couple") %>% 
+  dplyr::select (-"COUPLENUMBER") 
+
+subst <- subst[,c(ncol(subst), 1:(ncol(subst)-1))]
+
+colnames(subst) <- make.names(colnames(subst))
+colnames(subst)[-1] <- paste0("subst_", colnames(subst))[-1]
+```
+
+
+### Machine learning approach :
+
+filter out lowly variable genes:
+
+```{r, echo = FALSE}
+sds <- apply(subst[,-1],2,sd)
+plot(sort(sds), type = "l")
+abline(h=quantile(sds, 0.5), col="red")
+expT <- subst[,which(sds>=quantile(sds, 0.5))+1]
+rnames <- rownames(expT)
+expT <- apply(expT,2,as.numeric)
+rownames(expT) <- rnames
+```
+
+Prepare the data:
+```{r, cache=FALSE, results='hide', warning=FALSE, comment=FALSE, warning=FALSE, message = FALSE, include=FALSE, echo = FALSE}
+norm_data <- expT
+group <- subst$group
+norm_data <- as.data.frame(norm_data) %>% 
+  rownames_to_column("couple_nb") %>% 
+  mutate(group = group) %>% 
+  column_to_rownames("couple_nb") %>% 
+  dplyr::select(group, colnames(expT))
+norm_data[,1] <- as.factor(norm_data[,1])
+colnames(norm_data) <- make.names(colnames(norm_data))
+
+norm_data_3gr_dr <- norm_data
+```
+
+We can apply a principal components analysis to see if there is some structure
+in the data that can already be seen:
+```{r, echo = FALSE}
+genes_in_norm_data <- colnames(norm_data %>% dplyr::select(-group))
+colnames(big_mat) <- make.names(colnames(big_mat))
+bmat <- big_mat %>% 
+  dplyr::select(c(gsub("subst_", "", genes_in_norm_data),
+                  "GROUP", "Id.Cryostem.R", "COUPLENUMBER")) %>% 
+  mutate(GROUP = as.factor(tolower(GROUP)))
+
+tosave <- bmat %>% column_to_rownames("Id.Cryostem.R")
+saveRDS(tosave, "../data/RNAseq/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+saveRDS(norm_data, "../data/RNAseq/compar_donors_recipients/mat_all_patients.RDS")
+
+toplot <- bmat %>% 
+  dplyr::select(-GROUP, -COUPLENUMBER) %>% 
+  column_to_rownames("Id.Cryostem.R")
+pca <- prcomp(as.matrix(toplot))
+
+pca_2plot <- as.data.frame(pca$x, stringsAsFactors = F) %>% 
+  dplyr::select(PC1, PC2) %>% 
+  mutate(Id.Cryostem.R = rownames(pca$x)) %>% 
+  left_join(bmat, by = "Id.Cryostem.R")
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(GROUP), label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+In the following PCA plot, we plot the recipients as black dots, the donors as 
+white dots, and we link donors and recipients that belong to the same couple by
+a line of the color of their group.
+```{r, echo = FALSE}
+plot(pca$x)
+distances = c()
+for (i in names(table(bmat$COUPLENUMBER))){
+  group_status <- bmat$GROUP[which(bmat$COUPLENUMBER==i)]
+  pt_coord <- pca$x[as.numeric(rownames(bmat)[which(bmat$COUPLENUMBER==i)]),c(1:2)]
+  if(group_status[1]=="non_tolerant"){
+    lines(pt_coord,col="red", lwd = 2)
+    points(pt_coord[1,1], pt_coord[1,2], pch = 19)
+  } else if(group_status[1]=="primary_tolerant"){
+    lines(pt_coord,col="green", lwd = 2)
+    points(pt_coord[1,1], pt_coord[1,2], pch = 19)
+  } else {
+    lines(pt_coord,col="blue", lwd = 2)
+    points(pt_coord[1,1], pt_coord[1,2], pch = 19)
+  }
+  distances = c(distances, sqrt((pt_coord[2,1]-pt_coord[1,1])^2 + (pt_coord[2,2]-pt_coord[1,2])^2))
+}
+```
+
+It looks like, in the RNAseq data of the St Louis cohort, the distances 
+between non tolerant donors and recipients are not really bigger from the 
+distances between primary or secondary tolerant donors and recipients. 
+```{r, echo = FALSE}
+
+list_couples <- names(table(bmat$COUPLENUMBER))
+names(distances) <- paste0("couple_",list_couples)
+couple_dist_matrix <- bmat[,c("COUPLENUMBER", "GROUP")] %>% arrange(COUPLENUMBER) %>% unique()
+couple_dist_matrix$GROUP <- as.factor(couple_dist_matrix$GROUP)
+dis_colors <- c("red","green","blue")[couple_dist_matrix$GROUP]
+order_dis <- order(distances)
+
+plot(distances[order_dis], col = dis_colors[order_dis], pch=19,
+     main = "Distance between donor and recipient from same couple",
+     ylab = "Distance D/R", xaxt = "n", xlab = "")
+axis(1, at=seq_along(list_couples), labels=FALSE)
+text(x=seq_along(list_couples), y=par()$usr[3]-0.1*(par()$usr[4]-par()$usr[3]),
+     labels=names(distances[order_dis]), srt=45, adj=1, xpd=TRUE, cex = .7)
+legend("topleft", c("non_tolerant","primary_tolerant","secondary_tolerant"),
+       col = c("red","green","blue"), pch = 19)
+```
+
+We can already try to classify the couples based on all the genes:
+```{r, echo = FALSE, eval = FALSE}
+set.seed(1)
+rf_dr <- ranger::ranger(group~., norm_data, num.trees = 1000,
+                           importance = "impurity")
+rf_dr$confusion.matrix
+rf_dr$prediction.error
+```
+
+Trying to classify between non tolerant and tolerant couples:
+
+```{r, echo=FALSE, eval = FALSE}
+set.seed(1)
+rf1_subst <- rf_tol_non_tol(df_orig = norm_data, ntree = 5000)
+rf1_subst
+```
+
+Trying to classify only primary and seconday tolerant couples:
+```{r, echo = FALSE, eval = FALSE}
+set.seed(1)
+rf_subst_tol <- rf_tol1_tol2(df_orig = norm_data, ntree = 5000)
+rf_subst_tol
+```
+
+
+## Feature selection
+
+### Investigating into metabolites that mainly differ between tolerant and non tolerant couples:
+
+Run the permutation distribution, taking demographic variables into account:
+I first add the age and gender compatibility information to the data.
+```{r, echo = FALSE}
+dr_info <- couple_info %>% 
+  mutate(COUPLENUMBER = paste0("couple_", COUPLENUMBER)) %>% 
+  dplyr::filter(grepl("R", rownames(couple_info))) 
+
+norm_data <- norm_data_3gr_dr %>% 
+  rownames_to_column("COUPLENUMBER") %>% 
+  left_join(dr_info %>% dplyr::select(COUPLENUMBER, gender_comp, age_recip),
+            by = "COUPLENUMBER") %>% 
+  column_to_rownames("COUPLENUMBER")
+```
+
+And then compute the permutation distribution for the non vs tolerance:
+```{r, eval=FALSE, echo = FALSE}
+norm_data$group <- as.character(norm_data$group)
+norm_data$group[which(norm_data$group!="non_tolerant")] <- "tolerant"
+norm_data$group <- as.factor(norm_data$group)
+
+perm_vals_PRISM(norm_data = norm_data, PRISM_name = "rnaseq_dr_TNT",
+                rds_name = "handle_louis_rna_dr_TNT.rds")
+
+handle3 <- readRDS("handle_louis_rna_dr_TNT.rds")
+perm_vals <- qsub_retrieve(handle3)
+
+save(perm_vals, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/perm_vals_TNT.RData")
+save(norm_data, file= "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/norm_data_TNT.RData")
+```
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/perm_vals_TNT.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/norm_data_TNT.RData")
+
+gr_medians <- norm_data %>%
+  group_by(group) %>%
+  summarize_if(is.numeric, median) %>%
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+#### Threshold of 0.95
+
+These genes were selected as informative to classify the non and tolerant 
+recipients, with a 0.95 threshold:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+densityplot(qt)
+selected_genes_qt <- colnames(norm_data)[which(qt>.95)+1]
+write.xlsx(selected_genes_qt, file = "../data/RNAseq/donors_and_recip/perm_val_TNT_95_thresh.xlsx")
+print(paste0(length(selected_genes_qt),
+             " genes were above the 0.90 threshold in the Cryostem cohort."))
+```
+
+Which of these selected genes are common with the Cryostem cohort?
+```{r}
+sel_cryo <- read.xlsx("../data/RNA_seq_national/donors_and_recip/perm_val_TNT_95_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_genes_qt %in% sel_cryo$X1)
+print(paste0(length(sel_common), " genes were common between the two cohorts."))
+# selected_genes_qt[sel_common]
+```
+
+Graph of these selected genes that were found commonly between the two cohorts:
+```{r}
+correlations <- norm_data[,selected_genes_qt[sel_common]] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selected_genes_qt[sel_common])
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#0000FF80"
+  }
+}
+
+# recip_path <- "~/Desktop/"
+# 
+# pdf(paste0(recip_path, "cryo_common_metabolites_recip_05.pdf"), width = 12, height = 8)
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selected_genes_qt[sel_common],
+                 path_obj = "../data/RNAseq/donors_and_recip/rna_dr_louis_TNT_95.RDS",
+                 compar_design = "TNT",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_and_recip/annot_68selected_genes_dr_TNT_95.xlsx")
+```
+
+We can see how many of these genes had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients). I save the genes 
+information for the St Louis cohort:
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_genes_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/RNAseq/donors_and_recip/perm_val_dir_TNT_95_thresh.xlsx")
+dir_genes_louis <- dir_genes
+```
+
+Graph of the 6 features that had the same behaviour in both cohorts:
+```{r}
+sel_beh <- read.xlsx("../data/RNAseq/donors_and_recip/perm_val_beh_TNT_95_thresh.xlsx")
+selb <- sel_beh$sel_beh
+
+correlations <- norm_data[,selb] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selb)
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#0000FF80", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["non_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#FF000080"
+  }
+}
+
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+```
+
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selb,
+                 path_obj = "../data/RNAseq/donors_and_recip/rna_dr_louis_beh_TNT_95.RDS",
+                 compar_design = "TNT",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_and_recip/annot_28selected_genes_dr_TNT_95.xlsx")
+```
+
+Now that we have selected features that should help us classify primary and 
+secondary tolerant recipients, we can see that a RF model built on these selected
+features is giving similar results to the one built on all genes:
+```{r}
+rna_dr_louis_TNT_95 <- readRDS("../data/RNAseq/donors_and_recip/rna_dr_louis_TNT_95.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_dr_louis_TNT_95, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+We can also build a RF only on the 28 genes that had the same behaviour in 
+the two cohorts, which slightly improves the classification:
+```{r}
+rna_dr_louis_beh_TNT_95 <- readRDS("../data/RNAseq/donors_and_recip/rna_dr_louis_beh_TNT_95.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_dr_louis_beh_TNT_95, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+
+#### Threshold of 0.90
+
+These genes were selected as informative to classify the non and tolerant 
+recipients, with a 0.90 threshold:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+densityplot(qt)
+selected_genes_qt <- colnames(norm_data)[which(qt>.90)+1]
+write.xlsx(selected_genes_qt, file = "../data/RNAseq/donors_and_recip/perm_val_TNT_90_thresh.xlsx")
+print(paste0(length(selected_genes_qt),
+             " genes were above the 0.90 threshold in the Cryostem cohort."))
+```
+
+Which of these selected genes are common with the Cryostem cohort?
+```{r, echo = FALSE}
+sel_cryo <- read.xlsx("../data/RNA_seq_national/donors_and_recip/perm_val_TNT_90_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_genes_qt %in% sel_cryo$X1)
+print(paste0(length(sel_common), " genes were common between the two cohorts."))
+# selected_genes_qt[sel_common]
+```
+
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selected_genes_qt[sel_common],
+                 path_obj = "../data/RNAseq/donors_and_recip/rna_dr_louis_TNT_90.RDS",
+                 compar_design = "TNT",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_and_recip/annot_196selected_genes_dr_TNT_90.xlsx")
+```
+
+We can see how many of these genes had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients). I save the genes 
+information for the St Louis cohort:
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_genes_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/RNAseq/donors_and_recip/perm_val_dir_TNT_90_thresh.xlsx")
+dir_genes_louis <- dir_genes
+```
+
+Graph of the 87 features that had the same behaviour in both cohorts:
+```{r}
+sel_beh <- read.xlsx("../data/RNAseq/donors_and_recip/perm_val_beh_TNT_90_thresh.xlsx")
+selb <- sel_beh$sel_beh
+
+plot_correlations(ft_df = norm_data[,c("group",selb)],
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNA_seq_national/donors_and_recip/rna_dr_cryo_TNT_90.RData",
+                  compar = "TNT", pval_threshold = 0.01)
+```
+
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selb,
+                 path_obj = "../data/RNAseq/donors_and_recip/rna_dr_louis_beh_TNT_90.RDS",
+                 compar_design = "TNT",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_and_recip/annot_87selected_genes_dr_TNT_90.xlsx")
+```
+
+Now that we have selected features that should help us classify primary and 
+secondary tolerant recipients, we can see that a RF model built on these selected
+features is giving similar results to the one built on all genes:
+```{r}
+rna_dr_louis_TNT_90 <- readRDS("../data/RNAseq/donors_and_recip/rna_dr_louis_TNT_90.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_dr_louis_TNT_90, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+We can also build a RF only on the 28 genes that had the same behaviour in 
+the two cohorts, which doesn't improve the classification:
+```{r}
+rna_dr_louis_beh_TNT_90 <- readRDS("../data/RNAseq/donors_and_recip/rna_dr_louis_beh_TNT_90.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_dr_louis_beh_TNT_90, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+
+### Including age and gender in the analysis 
+
+Of the 196 genes that were selected as informative on tolerance in both cohorts, 
+which ones are still high after correcting for age and gender?
+```{r, echo = FALSE}
+sel_com_names <- selected_genes_qt[sel_common]
+
+qt_demo <- unlist(map(perm_vals, 2))
+qt_sel <- qt_demo[which(qt>.90)+1]
+names(qt_sel) <- colnames(norm_data)[which(qt>.90)+1]
+qt_sel <- qt_sel[sel_com_names]
+
+densityplot(qt_sel)
+```
+
+A few genes (third "bump" in the density plot) still add information on the 
+tolerance even after correction for gender and age:
+```{r}
+names(qt_sel)[which(qt_sel>0.7)]
+order_demo_corr <- sel_com_names[order(qt_sel, decreasing=T)]
+```
+
+Which of the 196 selected genes were most linked to gender?
+```{r, message = FALSE, error = FALSE, echo = FALSE}
+auc_g <- lapply(sel_com_names, function(gene_g){
+  fit <- nnet::multinom(gender_comp ~ eval(parse(text=gene_g)), data=norm_data,trace=F)
+  AUC <- pROC::multiclass.roc(norm_data$gender_comp,as.numeric(fitted(fit)[,1]))$auc[[1]]
+})
+
+```
+
+```{r, echo = FALSE}
+order_gender <- sel_com_names[order(unlist(auc_g), decreasing = T)]
+densityplot(unlist(auc_g))
+sel_com_names[which(auc_g > .75)]
+```
+
+Boxplots of these most gender related genes:
+```{r, echo = FALSE}
+toplot <- norm_data[,c("gender_comp", sel_com_names[which(auc_g > .75)])]
+for(i in seq_along(sel_com_names[which(auc_g > .75)])){
+  data_tmp <- data.frame(Var = toplot[, i+1],group = toplot[, 1])
+  g<- ggplot(data_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) + 
+    geom_jitter(aes(x = group, y = Var, col = group), shape=16, position=position_jitter(0.2)) +
+    theme_minimal()
+  print(g+ggtitle(colnames(toplot)[i+1]))
+}
+
+```
+
+Which of the 196 selected genes were most linked to age?
+```{r, echo = FALSE}
+# I'll rather try with a linear model:
+auc_a <- lapply (sel_com_names, function(gene_a){
+  fit <- lm(age_recip ~ eval(parse(text=gene_a)), data=norm_data)
+  stat_val <- summary(fit)$sigma^2
+})
+
+```
+
+```{r, echo = FALSE}
+order_age <- sel_com_names[order(unlist(auc_a))]
+densityplot(unlist(auc_a))
+# which(auc_a<22000000)
+```
+
+We can plot the genes that seemed to be most linked to the age of the recipients:
+```{r, echo = FALSE}
+toplot <- norm_data[,c("age_recip", "group", sel_com_names[which(auc_a < 22000000)])]
+toplot$age_recip <- round(toplot$age_recip/365)
+for(i in seq_along(sel_com_names[which(auc_a < 22000000)])){
+  data_tmp <- data.frame(Var = toplot[, i+2],age_recip = toplot[, 1], group = toplot[,2])
+  g<- ggplot(data_tmp, aes(x = age_recip, y = Var)) + 
+    geom_point(aes(x = age_recip, y = Var, col = as.factor(group))) + geom_smooth(method = "loess") +
+    theme_minimal()
+  print(g+ ggtitle(colnames(toplot)[i+2]))
+}
+```
+
+### Identifying features that mainly differ between primary and secondary tolerant couples:
+
+Run the permutation distribution, taking demographic variables into account:
+I first add the age and gender compatibility information to the data.
+```{r, echo = FALSE}
+dr_info <- couple_info %>% 
+  mutate(COUPLENUMBER = paste0("couple_", COUPLENUMBER)) %>% 
+  dplyr::filter(grepl("R", rownames(couple_info))) 
+
+norm_data <- norm_data_3gr_dr %>% 
+  rownames_to_column("COUPLENUMBER") %>% 
+  left_join(dr_info %>% dplyr::select(COUPLENUMBER, gender_comp, age_recip),
+            by = "COUPLENUMBER") %>% 
+  column_to_rownames("COUPLENUMBER")
+```
+
+And then compute the permutation distribution for the primary vs secondary tolerance:
+```{r, eval=FALSE, echo = FALSE}
+norm_data <- norm_data %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(group != "non_tolerant") %>% 
+  mutate(group = as.factor(as.character(group))) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+perm_vals_PRISM(norm_data = norm_data, PRISM_name = "rnaseq_dr_PS",
+                rds_name = "handle_louis_rna_dr_PS.rds")
+
+handle3 <- readRDS("handle_louis_rna_dr_PS.rds")
+perm_vals <- qsub_retrieve(handle3)
+
+save(perm_vals, file = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/perm_vals_PS.RData")
+save(norm_data, file= "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/norm_data_PS.RData")
+```
+
+Compute the median per group for every gene, to use it later in the graphs:
+```{r}
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/perm_vals_PS.RData")
+load("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNAseq/donors_and_recip/norm_data_PS.RData")
+
+gr_medians <- norm_data %>%
+  group_by(group) %>%
+  summarize_if(is.numeric, median) %>%
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+```
+
+#### Threshold of 0.95
+
+These genes were selected as informative to classify the non and tolerant 
+recipients, with a 0.95 threshold:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+densityplot(qt)
+selected_genes_qt <- colnames(norm_data)[which(qt>.95)+1]
+write.xlsx(selected_genes_qt, file = "../data/RNAseq/donors_and_recip/perm_val_PS_95_thresh.xlsx")
+print(paste0(length(selected_genes_qt),
+             " genes were above the 0.90 threshold in the Cryostem cohort."))
+```
+
+Which of these selected genes are common with the Cryostem cohort?
+```{r, echo = FALSE}
+sel_cryo <- read.xlsx("../data/RNA_seq_national/donors_and_recip/perm_val_PS_95_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_genes_qt %in% sel_cryo$X1)
+print(paste0(length(sel_common), " genes were common between the two cohorts."))
+# selected_genes_qt[sel_common]
+```
+
+Graph of these selected genes that were found commonly between the two cohorts:
+```{r, echo = FALSE}
+correlations <- norm_data[,selected_genes_qt[sel_common]] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selected_genes_qt[sel_common])
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#0000FF80", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#00FF0080"
+  }
+}
+
+# recip_path <- "~/Desktop/"
+# 
+# pdf(paste0(recip_path, "cryo_common_metabolites_recip_05.pdf"), width = 12, height = 8)
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+
+```{r}
+colData_orig <- colData
+```
+
+
+```{r}
+# rownames(norm_data) are couple numbers -> I change the rownames of colData 
+# to couples as well so that I can keep using my functions
+colData <- colData_orig
+colData <- colData %>% 
+  dplyr::filter(grepl("R", rownames(colData))) %>% 
+  mutate(COUPLE = paste0("couple_", COUPLENUMBER))
+rownames(colData) <- colData$COUPLE
+```
+
+
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selected_genes_qt[sel_common],
+                 path_obj = "../data/RNAseq/donors_and_recip/rna_dr_louis_PS_95.RDS",
+                 compar_design = "PS",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_and_recip/annot_111selected_genes_dr_PS_95.xlsx")
+```
+
+We can see how many of these genes had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients). I save the genes 
+information for the St Louis cohort:
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_genes_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/RNAseq/donors_and_recip/perm_val_dir_PS_95_thresh.xlsx")
+dir_genes_louis <- dir_genes
+```
+
+Graph of the 6 features that had the same behaviour in both cohorts:
+```{r}
+sel_beh <- read.xlsx("../data/RNAseq/donors_and_recip/perm_val_beh_PS_95_thresh.xlsx")
+selb <- sel_beh$sel_beh
+
+correlations <- norm_data[,selb] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selb)
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#0000FF80", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#00FF0080"
+  }
+}
+
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+```
+
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selb,
+                 path_obj = "../data/RNAseq/donors_and_recip//rna_dr_louis_beh_PS_95.RDS",
+                 compar_design = "PS",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_and_recip/annot_6selected_genes_dr_PS_95.xlsx")
+```
+
+Now that we have selected features that should help us classify primary and 
+secondary tolerant recipients, we can see that a RF model built on these selected
+features is better than the one built on all genes:
+```{r}
+rna_dr_louis_PS_95 <- readRDS("../data/RNAseq/donors_and_recip/rna_dr_louis_PS_95.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_dr_louis_PS_95, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+We can also build a RF only on the 6 genes that had the same behaviour in both
+cohorts, but this doesn't make the classification better or worse:
+```{r, echo = FALSE}
+rna_dr_louis_beh_PS_95 <- readRDS("../data/RNAseq/donors_and_recip/rna_dr_louis_beh_PS_95.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_dr_louis_beh_PS_95, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+
+#### Threshold of 0.90
+
+These genes were selected as informative to classify the non and tolerant 
+couples, with a 0.90 threshold:
+```{r, echo = FALSE}
+qt <- unlist(map(perm_vals, 1))
+densityplot(qt)
+selected_genes_qt <- colnames(norm_data)[which(qt>.90)+1]
+write.xlsx(selected_genes_qt, file = "../data/RNAseq/donors_and_recip/perm_val_PS_90_thresh.xlsx")
+print(paste0(length(selected_genes_qt),
+             " genes were above the 0.90 threshold in the Cryostem cohort."))
+```
+
+Which of these selected genes are common with the Cryostem cohort?
+```{r, echo = FALSE}
+sel_cryo <- read.xlsx("../data/RNA_seq_national/donors_and_recip/perm_val_PS_90_thresh.xlsx", colNames = FALSE)
+sel_common <- which(selected_genes_qt %in% sel_cryo$X1)
+print(paste0(length(sel_common), " genes were common between the two cohorts."))
+# selected_genes_qt[sel_common]
+```
+
+Graph of these selected genes that were found commonly between the two cohorts:
+```{r, echo = FALSE}
+correlations <- norm_data[,selected_genes_qt[sel_common]] %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=selected_genes_qt[sel_common])
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#0000FF80", length(nodes$name))
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["primary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#00FF0080"
+  }
+}
+
+# recip_path <- "~/Desktop/"
+# 
+# pdf(paste0(recip_path, "cryo_common_metabolites_recip_05.pdf"), width = 12, height = 8)
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selected_genes_qt[sel_common],
+                 path_obj = "../data/RNAseq/donors_and_recip/rna_dr_louis_PS_90.RDS",
+                 compar_design = "PS",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_and_recip/annot_337selected_genes_dr_PS_90.xlsx")
+```
+
+We can see how many of these genes had the same behaviour in the two cohorts (ie, 
+were over or underexpressed in the same group of patients). I save the genes 
+information for the St Louis cohort:
+```{r, echo = FALSE}
+dir <- lapply(seq_len(length(sel_common)), function(idx){
+  gene <- selected_genes_qt[sel_common[idx]]
+  overexp <- rownames(gr_medians)[which.is.max(gr_medians[gene][,1])]
+  list(gene, overexp)
+})
+dir_genes <- do.call(rbind, dir)
+write.xlsx(dir_genes, file = "../data/RNAseq/donors_and_recip/perm_val_dir_PS_90_thresh.xlsx")
+dir_genes_louis <- dir_genes
+```
+
+Graph of the 15 features that had the same behaviour in both cohorts:
+```{r}
+sel_beh <- read.xlsx("../data/RNAseq/donors_and_recip/perm_val_beh_PS_90_thresh.xlsx")
+selb <- sel_beh$sel_beh
+
+plot_correlations(ft_df = norm_data[,c("group",selb)],
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNA_seq_national/donors_and_recip/rna_dr_cryo_PS_90.RData",
+                  compar = "PS", pval_threshold = 0.01)
+```
+
+```{r, echo = FALSE}
+save_genes_annot(norm_data = norm_data,
+                 selected_genes = selb,
+                 path_obj = "../data/RNAseq/donors_and_recip/rna_dr_louis_beh_PS_90.RDS",
+                 compar_design = "PS",
+                 graph = gr,
+                 path_annot_obj = "../data/RNAseq/donors_and_recip/annot_15selected_genes_dr_PS_90.xlsx")
+```
+
+Now that we have selected features that should help us classify primary and 
+secondary tolerant recipients, we can see that a RF model built on these selected
+features is better than the one built on all genes:
+```{r}
+rna_dr_louis_PS_90 <- readRDS("../data/RNAseq/donors_and_recip/rna_dr_louis_PS_90.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_dr_louis_PS_90, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+We can also build a RF only on the 15 genes that had the same behaviour in both
+cohorts, but this doesn't make the classification better or worse:
+```{r, echo = FALSE}
+rna_dr_louis_beh_PS_90 <- readRDS("../data/RNAseq/donors_and_recip/rna_dr_louis_beh_PS_90.RDS")
+set.seed(1)
+rf <- ranger::ranger(group~., data = rna_dr_louis_beh_PS_90, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+### Including age and gender in the analysis 
+
+Of the 337 genes that were selected as informative on tolerance in both cohorts, 
+which ones are still high after correcting for age and gender?
+```{r, echo = FALSE}
+sel_com_names <- selected_genes_qt[sel_common]
+
+qt_demo <- unlist(map(perm_vals, 2))
+qt_sel <- qt_demo[which(qt>.90)+1]
+names(qt_sel) <- colnames(norm_data)[which(qt>.90)+1]
+qt_sel <- qt_sel[sel_com_names]
+
+densityplot(qt_sel)
+```
+
+A few genes (third "bump" in the density plot) still add information on the 
+tolerance even after correction for gender and age:
+```{r}
+names(qt_sel)[which(qt_sel>0.7)]
+order_demo_corr <- sel_com_names[order(qt_sel, decreasing=T)]
+```
+
+Which of the 337 selected genes were most linked to gender?
+```{r, message = FALSE, error = FALSE, echo = FALSE}
+auc_g <- lapply(sel_com_names, function(gene_g){
+  fit <- nnet::multinom(gender_comp ~ eval(parse(text=gene_g)), data=norm_data,trace=F)
+  AUC <- pROC::multiclass.roc(norm_data$gender_comp,as.numeric(fitted(fit)[,1]))$auc[[1]]
+})
+
+```
+
+```{r, echo = FALSE}
+order_gender <- sel_com_names[order(unlist(auc_g), decreasing = T)]
+densityplot(unlist(auc_g))
+# sel_com_names[which(auc_g > .95)]
+```
+
+Boxplots of these most gender related genes:
+```{r, echo = FALSE}
+toplot <- norm_data[,c("gender_comp", sel_com_names[which(auc_g > .94)])]
+for(i in seq_along(sel_com_names[which(auc_g > .94)])){
+  data_tmp <- data.frame(Var = toplot[, i+1],group = toplot[, 1])
+  g<- ggplot(data_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) + 
+    geom_jitter(aes(x = group, y = Var, col = group), shape=16, position=position_jitter(0.2)) +
+    theme_minimal()
+  print(g+ggtitle(colnames(toplot)[i+1]))
+}
+
+```
+
+Which of the 337 selected genes were most linked to age?
+```{r, echo = FALSE}
+# I'll rather try with a linear model:
+auc_a <- lapply (sel_com_names, function(gene_a){
+  fit <- lm(age_recip ~ eval(parse(text=gene_a)), data=norm_data)
+  stat_val <- summary(fit)$sigma^2
+})
+
+```
+
+```{r, echo = FALSE}
+order_age <- sel_com_names[order(unlist(auc_a))]
+densityplot(unlist(auc_a))
+# which(auc_a<13000000)
+```
+
+We can plot the genes that seemed to be most linked to the age of the recipients:
+```{r, echo = FALSE}
+toplot <- norm_data[,c("age_recip", "group", sel_com_names[which(auc_a < 12000000)])]
+toplot$age_recip <- round(toplot$age_recip/365)
+for(i in seq_along(sel_com_names[which(auc_a < 12000000)])){
+  data_tmp <- data.frame(Var = toplot[, i+2],age_recip = toplot[, 1], group = toplot[,2])
+  g<- ggplot(data_tmp, aes(x = age_recip, y = Var)) + 
+    geom_point(aes(x = age_recip, y = Var, col = as.factor(group))) + geom_smooth(method = "loess") +
+    theme_minimal()
+  print(g+ ggtitle(colnames(toplot)[i+2]))
+}
+```
+
+# Combining the information on couples, recipients and donors:
+
+Now that we have selected features at the couple level, at the recipient level 
+and at the donor level, we can try to combine these features:
+
+## Classifying non versus tolerant patients based on all the information:
+
+#### Threshold of 0.95:
+
+We first combine the features that were selected as highly informative to 
+classify between tolerant and non tolerant patients from the couples, recipients 
+and donors into one big table:
+```{r, echo = FALSE}
+# couple info:
+load("../data/RNAseq/donors_and_recip/rna_dr_louis_TNT_95.RData")
+pctgs_couples <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER", "gender_comp", "age_recip") %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  inner_join(rna_dr_louis_TNT_95 %>% 
+               rownames_to_column("COUPLENUMBER") %>% 
+               mutate(COUPLENUMBER = as.numeric(gsub("couple_","", COUPLENUMBER))), by = "COUPLENUMBER")
+
+# recip info:
+load("../data/RNAseq/recip_only/rna_recip_louis_TNT_95.RData")
+colnames2keep <- which(colnames(rna_recip_louis_TNT_95) %in% c("group"))
+colnames(rna_recip_louis_TNT_95)[-colnames2keep] <-
+  paste0("R_", colnames(rna_recip_louis_TNT_95)[-colnames2keep])
+pctgs_recip <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_recip_louis_TNT_95 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R")
+
+# donor info :
+load("../data//RNAseq/donors_only/rna_donors_louis_TNT_95.RData")
+colnames2keep <- which(colnames(rna_donors_louis_TNT_95) %in% c("group"))
+colnames(rna_donors_louis_TNT_95)[-colnames2keep] <-
+  paste0("D_", colnames(rna_donors_louis_TNT_95)[-colnames2keep])
+pctgs_donor <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_donors_louis_TNT_95 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R") 
+
+# combine :
+pctgs_all <- pctgs_couples %>% 
+  left_join(pctgs_recip, by = c("Id.Cryostem.R", "COUPLENUMBER", "group")) %>% 
+  left_join(pctgs_donor, by = c("COUPLENUMBER", "group"))
+```
+
+We can generate a PCA and a tSNE using all these features to see how the tolerant 
+and non tolerant patients are represented in the reduced dimensions:
+```{r, echo = FALSE}
+pctgs_all_only <- pctgs_all %>%
+  column_to_rownames("COUPLENUMBER") %>% 
+  dplyr::select_if(is.numeric) %>% 
+  dplyr::select(-"age_recip")
+
+pca_all <- prcomp(pctgs_all_only)
+```
+
+The 2 first components of the PCA seem to hold quite a lot of the variability in the data:
+```{r}
+plot(pca_all)
+```
+
+```{r, echo = FALSE}
+set.seed(1)
+pca_2plot <- as.data.frame(pca_all$x) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pca_all$x))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(group), label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+The tolerant patients seem to be situated more on the left of the 
+PCA, even though they are a bit mixed with the non tolerant patients.
+
+We can also generate a tSNE on the same data:
+```{r, echo = FALSE}
+set.seed(1)
+tsne_all <- Rtsne::Rtsne(pctgs_all_only, perplexity = 10)
+tsne_2plot <- as.data.frame(tsne_all$Y) %>% 
+  magrittr::set_colnames(c("X1", "X2")) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pctgs_all_only))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+
+ggplot(tsne_2plot, aes(x = X1, y = X2, col = as.factor(group), 
+                       label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+We can see if building a model using all these features combined leads to good
+classification results between tolerant and non tolerant patients:
+```{r, echo = FALSE}
+pctgs_all_RF <- pctgs_all %>% 
+  dplyr::select(-"COUPLENUMBER", -"gender_comp", -"age_recip") %>% 
+  mutate(group = as.factor(group)) %>% 
+  column_to_rownames("Id.Cryostem.R.x")
+
+set.seed(1)
+nb_features = ncol(pctgs_all_RF)-1
+
+rf <- rf_tol_non_tol(df_orig = pctgs_all_RF,
+                      mtry = round(sqrt(nb_features)), ntree = 1000, package_2use = "ranger")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+It seems like we have extracted some information allowing us to classify the non
+tolerant patients as such. We can see which features were selected in the model 
+to classify tolerant from non tolerant patients in the Cryostem cohort:
+```{r, echo = FALSE}
+sort(rf$variable.importance, decreasing = TRUE)[1:20]
+```
+
+And visualise the top variables in a heatmap:
+```{r, echo = FALSE}
+mat2plot <- pctgs_all_RF[,c("group", names(sort(rf$variable.importance, decreasing = TRUE))[1:20])] %>% 
+  rownames_to_column("rownames") %>% 
+  arrange(group) %>% 
+  column_to_rownames("rownames")
+
+annot_patients <- as.data.frame(mat2plot$group)
+rownames(annot_patients) <- rownames(mat2plot)
+colnames(annot_patients) <- "group"
+ann_colors <- list(group = c(non_tolerant = "indianred1", 
+                             tolerant = "royalblue1"))
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = FALSE,
+                   cluster_cols = FALSE,
+                   main = "Heatmap with patients ordered by group",
+                   scale = "column")
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = TRUE,
+                   main = "Heatmap with patients clustered",
+                   scale = "column")
+```
+
+Finally, we can see which features were commonly selected between the recipients,
+donors and couples:
+
+```{r, echo = FALSE}
+recip_fts <- colnames(pctgs_all_RF)[grepl("R_", colnames(pctgs_all_RF))] 
+r_fts <- gsub("R_", "", recip_fts)
+
+donor_fts <- colnames(pctgs_all_RF)[grepl("D_", colnames(pctgs_all_RF))] 
+d_fts <- gsub("D_", "", donor_fts)
+
+couple_fts <- colnames(pctgs_all_RF)[grepl("subst_", colnames(pctgs_all_RF))] 
+dr_fts <- gsub("subst_", "", couple_fts)
+```
+
+```{r, echo = FALSE}
+df.venn <- data.frame(x = c(0, 0.866, -0.866),
+                      y = c(1, -0.5, -0.5),
+                      labels = c('recipients', 'donors', 'couples'))
+ggplot(df.venn) +
+  ggforce::geom_circle(aes(x0 = x, y0 = y, r = 1.5, fill = labels), alpha = .3, size = 1, colour = 'grey') +
+  coord_fixed() +
+  theme_void() +
+  theme(legend.position = 'bottom') +
+  scale_fill_manual(values = c('cornflowerblue', 'firebrick',  'gold')) +
+  scale_colour_manual(values = c('cornflowerblue', 'firebrick', 'gold'), guide = FALSE) +
+  labs(fill = NULL) +
+  annotate("text", x = c(0, 1.4, -1.4, 0.9, 0, -0.9, 0), 
+           y = c(1.4, -0.8, -0.8, 0.5, -1, 0.5, 0), 
+           label = c(length(r_fts) - (length(which(r_fts %in% d_fts)) + length(which(r_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(d_fts) - (length(which(d_fts %in% r_fts)) + length(which(d_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(dr_fts) - (length(which(dr_fts %in% d_fts)) + length(which(dr_fts %in% r_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(which(r_fts %in% d_fts)),
+                     length(which(d_fts %in% dr_fts)),
+                     length(which(r_fts %in% dr_fts)),
+                     
+                     length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))), 
+           size = 5)
+```
+
+```{r, echo = FALSE}
+print("Genes that were commonly selected in donors and recipients: ")
+print(r_fts[which(r_fts %in% d_fts)])
+print("Genes that were commonly selected in donors and couples: ")
+print(d_fts[which(d_fts %in% dr_fts)])
+print("Genes that were commonly selected in recipients and couples: ")
+print(r_fts[which(r_fts %in% dr_fts)])
+print("Genes that were commonly selected in donors, recipients and couples: ")
+print(Reduce(intersect, list(r_fts, d_fts, dr_fts)))
+```
+
+#### Threshold of 0.90
+
+We first combine the features that were selected as highly informative to 
+classify between tolerant and non tolerant patients from the couples, recipients 
+and donors into one big table:
+```{r, echo = FALSE}
+# couple info:
+load("../data/RNAseq/donors_and_recip/rna_dr_louis_TNT_90.RData")
+# # add "couple_" in front of the feature names 
+# colnames2keep <- which(colnames(pctgs_sel_ft_couples_90) %in% c("group", "COUPLENUMBER"))
+# colnames(pctgs_sel_ft_couples_90)[-colnames2keep] <-
+#   gsub("X", "couple_", colnames(pctgs_sel_ft_couples_90)[-colnames2keep])
+# combine feature info with couple info about gender_comp...
+pctgs_couples <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER", "gender_comp", "age_recip") %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  inner_join(rna_dr_louis_TNT_90 %>% 
+               rownames_to_column("COUPLENUMBER") %>% 
+               mutate(COUPLENUMBER = as.numeric(gsub("couple_","", COUPLENUMBER))), by = "COUPLENUMBER")
+
+# recip info:
+load("../data/RNAseq/recip_only/rna_recip_louis_TNT_90.RData")
+colnames2keep <- which(colnames(rna_recip_louis_TNT_90) %in% c("group"))
+colnames(rna_recip_louis_TNT_90)[-colnames2keep] <-
+  paste0("R_", colnames(rna_recip_louis_TNT_90)[-colnames2keep])
+pctgs_recip <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_recip_louis_TNT_90 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R")
+
+# donor info :
+load("../data//RNAseq/donors_only/rna_donors_louis_TNT_90.RData")
+colnames2keep <- which(colnames(rna_donors_louis_TNT_90) %in% c("group"))
+colnames(rna_donors_louis_TNT_90)[-colnames2keep] <-
+  paste0("D_", colnames(rna_donors_louis_TNT_90)[-colnames2keep])
+pctgs_donor <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_donors_louis_TNT_90 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R") 
+
+# combine :
+pctgs_all <- pctgs_couples %>% 
+  left_join(pctgs_recip, by = c("Id.Cryostem.R", "COUPLENUMBER", "group")) %>% 
+  left_join(pctgs_donor, by = c("COUPLENUMBER", "group"))
+```
+
+We can generate a PCA and a tSNE using all these features to see how the tolerant 
+and non tolerant patients are represented in the reduced dimensions:
+```{r, echo = FALSE}
+pctgs_all_only <- pctgs_all %>%
+  column_to_rownames("COUPLENUMBER") %>% 
+  dplyr::select_if(is.numeric) %>% 
+  dplyr::select(-"age_recip")
+
+pca_all <- prcomp(pctgs_all_only)
+```
+
+The 2 first components of the PCA seem to hold quite a lot of the variability in the data:
+```{r}
+plot(pca_all)
+```
+
+```{r, echo = FALSE}
+set.seed(1)
+pca_2plot <- as.data.frame(pca_all$x) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pca_all$x))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(group), label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+The tolerant patients seem to be situated more on the left of the 
+PCA, even though they are a bit mixed with the non tolerant patients.
+
+We can also generate a tSNE on the same data:
+```{r, echo = FALSE}
+set.seed(1)
+tsne_all <- Rtsne::Rtsne(pctgs_all_only, perplexity = 10)
+tsne_2plot <- as.data.frame(tsne_all$Y) %>% 
+  magrittr::set_colnames(c("X1", "X2")) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pctgs_all_only))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+
+ggplot(tsne_2plot, aes(x = X1, y = X2, col = as.factor(group), 
+                       label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+We can see if building a model using all these features combined leads to good
+classification results between tolerant and non tolerant patients:
+```{r, echo = FALSE}
+pctgs_all_RF <- pctgs_all %>% 
+  dplyr::select(-"COUPLENUMBER", -"gender_comp", -"age_recip") %>% 
+  mutate(group = as.factor(group)) %>% 
+  column_to_rownames("Id.Cryostem.R.x")
+
+set.seed(1)
+nb_features = ncol(pctgs_all_RF)-1
+
+rf <- rf_tol_non_tol(df_orig = pctgs_all_RF,
+                      mtry = round(sqrt(nb_features)), ntree = 1000, package_2use = "ranger")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+It seems like we have extracted some information allowing us to classify the non
+tolerant patients as such. We can see which features were selected in the model 
+to classify tolerant from non tolerant patients in the Cryostem cohort:
+```{r, echo = FALSE}
+sort(rf$variable.importance, decreasing = TRUE)[1:20]
+```
+
+And visualise the top variables in a heatmap:
+```{r, echo = FALSE}
+mat2plot <- pctgs_all_RF[,c("group", names(sort(rf$variable.importance, decreasing = TRUE))[1:20])] %>% 
+  rownames_to_column("rownames") %>% 
+  arrange(group) %>% 
+  column_to_rownames("rownames")
+
+annot_patients <- as.data.frame(mat2plot$group)
+rownames(annot_patients) <- rownames(mat2plot)
+colnames(annot_patients) <- "group"
+ann_colors <- list(group = c(non_tolerant = "indianred1", 
+                             tolerant = "royalblue1"))
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = FALSE,
+                   cluster_cols = FALSE,
+                   main = "Heatmap with patients ordered by group",
+                   scale = "column")
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = TRUE,
+                   main = "Heatmap with patients clustered",
+                   scale = "column")
+```
+
+Finally, we can see which features were commonly selected between the recipients,
+donors and couples:
+
+```{r, echo = FALSE}
+recip_fts <- colnames(pctgs_all_RF)[grepl("R_", colnames(pctgs_all_RF))] 
+r_fts <- gsub("R_", "", recip_fts)
+
+donor_fts <- colnames(pctgs_all_RF)[grepl("D_", colnames(pctgs_all_RF))] 
+d_fts <- gsub("D_", "", donor_fts)
+
+couple_fts <- colnames(pctgs_all_RF)[grepl("subst_", colnames(pctgs_all_RF))] 
+dr_fts <- gsub("subst_", "", couple_fts)
+```
+
+```{r, echo = FALSE}
+df.venn <- data.frame(x = c(0, 0.866, -0.866),
+                      y = c(1, -0.5, -0.5),
+                      labels = c('recipients', 'donors', 'couples'))
+ggplot(df.venn) +
+  ggforce::geom_circle(aes(x0 = x, y0 = y, r = 1.5, fill = labels), alpha = .3, size = 1, colour = 'grey') +
+  coord_fixed() +
+  theme_void() +
+  theme(legend.position = 'bottom') +
+  scale_fill_manual(values = c('cornflowerblue', 'firebrick',  'gold')) +
+  scale_colour_manual(values = c('cornflowerblue', 'firebrick', 'gold'), guide = FALSE) +
+  labs(fill = NULL) +
+  annotate("text", x = c(0, 1.4, -1.4, 0.9, 0, -0.9, 0), 
+           y = c(1.4, -0.8, -0.8, 0.5, -1, 0.5, 0), 
+           label = c(length(r_fts) - (length(which(r_fts %in% d_fts)) + length(which(r_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(d_fts) - (length(which(d_fts %in% r_fts)) + length(which(d_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(dr_fts) - (length(which(dr_fts %in% d_fts)) + length(which(dr_fts %in% r_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(which(r_fts %in% d_fts)),
+                     length(which(d_fts %in% dr_fts)),
+                     length(which(r_fts %in% dr_fts)),
+                     
+                     length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))), 
+           size = 5)
+```
+
+```{r, echo = FALSE}
+print("Genes that were commonly selected in donors and recipients: ")
+print(r_fts[which(r_fts %in% d_fts)])
+print("Genes that were commonly selected in donors and couples: ")
+print(d_fts[which(d_fts %in% dr_fts)])
+print("Genes that were commonly selected in recipients and couples: ")
+print(r_fts[which(r_fts %in% dr_fts)])
+print("Genes that were commonly selected in donors, recipients and couples: ")
+print(Reduce(intersect, list(r_fts, d_fts, dr_fts)))
+```
+
+#### Focusing only on the genes that had a similar behaviour in the two cohorts:
+
+We first combine the features that were selected as highly informative to 
+classify between tolerant and non tolerant patients from the couples, recipients 
+and donors into one big table:
+```{r, echo = FALSE}
+# couple info:
+rna_dr_louis_TNT_90 <- readRDS("../data/RNAseq/donors_and_recip/rna_dr_louis_beh_TNT_90.RDS")
+pctgs_couples <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER", "gender_comp", "age_recip") %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  inner_join(rna_dr_louis_TNT_90 %>% 
+               rownames_to_column("COUPLENUMBER") %>% 
+               mutate(COUPLENUMBER = as.numeric(gsub("couple_","", COUPLENUMBER))), by = "COUPLENUMBER")
+
+# recip info:
+load("../data/RNAseq/recip_only/rna_recip_louis_beh_TNT_90.RData")
+colnames2keep <- which(colnames(rna_recip_louis_beh_TNT_90) %in% c("group"))
+colnames(rna_recip_louis_beh_TNT_90)[-colnames2keep] <-
+  paste0("R_", colnames(rna_recip_louis_beh_TNT_90)[-colnames2keep])
+pctgs_recip <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_recip_louis_beh_TNT_90 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R")
+
+# donor info :
+load("../data//RNAseq/donors_only/rna_donor_louis_beh_TNT_90.RData")
+colnames2keep <- which(colnames(rna_donor_louis_beh_TNT_90) %in% c("group"))
+colnames(rna_donor_louis_beh_TNT_90)[-colnames2keep] <-
+  paste0("D_", colnames(rna_donor_louis_beh_TNT_90)[-colnames2keep])
+pctgs_donor <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_donor_louis_beh_TNT_90 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R") 
+
+# combine :
+pctgs_all <- pctgs_couples %>% 
+  left_join(pctgs_recip, by = c("Id.Cryostem.R", "COUPLENUMBER", "group")) %>% 
+  left_join(pctgs_donor, by = c("COUPLENUMBER", "group"))
+```
+
+We can generate a PCA and a tSNE using all these features to see how the tolerant 
+and non tolerant patients are represented in the reduced dimensions:
+```{r, echo = FALSE}
+pctgs_all_only <- pctgs_all %>%
+  column_to_rownames("COUPLENUMBER") %>% 
+  dplyr::select_if(is.numeric) %>% 
+  dplyr::select(-"age_recip")
+
+pca_all <- prcomp(pctgs_all_only)
+```
+
+The first component of the PCA seems to hold quite a lot of the variability in the data:
+```{r}
+plot(pca_all)
+```
+
+```{r, echo = FALSE}
+set.seed(1)
+pca_2plot <- as.data.frame(pca_all$x) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pca_all$x))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(group), label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+The tolerant patients seem to be situated more on the left of the 
+PCA, even though they are a bit mixed with the non tolerant patients.
+
+We can also generate a tSNE on the same data:
+```{r, echo = FALSE}
+set.seed(1)
+tsne_all <- Rtsne::Rtsne(pctgs_all_only, perplexity = 10)
+tsne_2plot <- as.data.frame(tsne_all$Y) %>% 
+  magrittr::set_colnames(c("X1", "X2")) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pctgs_all_only))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+
+ggplot(tsne_2plot, aes(x = X1, y = X2, col = as.factor(group), 
+                       label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+We can see if building a model using all these features combined leads to good
+classification results between tolerant and non tolerant patients:
+```{r, echo = FALSE}
+pctgs_all_RF <- pctgs_all %>% 
+  dplyr::select(-"COUPLENUMBER", -"gender_comp", -"age_recip") %>% 
+  mutate(group = as.factor(group)) %>% 
+  column_to_rownames("Id.Cryostem.R.x")
+
+set.seed(1)
+nb_features = ncol(pctgs_all_RF)-1
+
+rf <- rf_tol_non_tol(df_orig = pctgs_all_RF,
+                      mtry = round(sqrt(nb_features)), ntree = 1000, package_2use = "ranger")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+It seems like we have extracted some information allowing us to classify the non
+tolerant patients as such. We can see which features were selected in the model 
+to classify tolerant from non tolerant patients in the Cryostem cohort:
+```{r, echo = FALSE}
+sort(rf$variable.importance, decreasing = TRUE)[1:20]
+```
+
+And visualise the top variables in a heatmap:
+```{r, echo = FALSE}
+mat2plot <- pctgs_all_RF[,c("group", names(sort(rf$variable.importance, decreasing = TRUE))[1:20])] %>% 
+  rownames_to_column("rownames") %>% 
+  arrange(group) %>% 
+  column_to_rownames("rownames")
+
+annot_patients <- as.data.frame(mat2plot$group)
+rownames(annot_patients) <- rownames(mat2plot)
+colnames(annot_patients) <- "group"
+ann_colors <- list(group = c(non_tolerant = "indianred1", 
+                             tolerant = "royalblue1"))
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = FALSE,
+                   cluster_cols = FALSE,
+                   main = "Heatmap with patients ordered by group",
+                   scale = "column")
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = TRUE,
+                   main = "Heatmap with patients clustered",
+                   scale = "column")
+```
+
+Finally, we can see which features were commonly selected between the recipients,
+donors and couples:
+
+```{r, echo = FALSE}
+recip_fts <- colnames(pctgs_all_RF)[grepl("R_", colnames(pctgs_all_RF))] 
+r_fts <- gsub("R_", "", recip_fts)
+
+donor_fts <- colnames(pctgs_all_RF)[grepl("D_", colnames(pctgs_all_RF))] 
+d_fts <- gsub("D_", "", donor_fts)
+
+couple_fts <- colnames(pctgs_all_RF)[grepl("subst_", colnames(pctgs_all_RF))] 
+dr_fts <- gsub("subst_", "", couple_fts)
+```
+
+```{r, echo = FALSE}
+df.venn <- data.frame(x = c(0, 0.866, -0.866),
+                      y = c(1, -0.5, -0.5),
+                      labels = c('recipients', 'donors', 'couples'))
+ggplot(df.venn) +
+  ggforce::geom_circle(aes(x0 = x, y0 = y, r = 1.5, fill = labels), alpha = .3, size = 1, colour = 'grey') +
+  coord_fixed() +
+  theme_void() +
+  theme(legend.position = 'bottom') +
+  scale_fill_manual(values = c('cornflowerblue', 'firebrick',  'gold')) +
+  scale_colour_manual(values = c('cornflowerblue', 'firebrick', 'gold'), guide = FALSE) +
+  labs(fill = NULL) +
+  annotate("text", x = c(0, 1.4, -1.4, 0.9, 0, -0.9, 0), 
+           y = c(1.4, -0.8, -0.8, 0.5, -1, 0.5, 0), 
+           label = c(length(r_fts) - (length(which(r_fts %in% d_fts)) + length(which(r_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(d_fts) - (length(which(d_fts %in% r_fts)) + length(which(d_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(dr_fts) - (length(which(dr_fts %in% d_fts)) + length(which(dr_fts %in% r_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(which(r_fts %in% d_fts)),
+                     length(which(d_fts %in% dr_fts)),
+                     length(which(r_fts %in% dr_fts)),
+                     
+                     length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))), 
+           size = 5)
+```
+
+```{r, echo = FALSE}
+print("Genes that were commonly selected in donors and recipients: ")
+print(r_fts[which(r_fts %in% d_fts)])
+print("Genes that were commonly selected in donors and couples: ")
+print(d_fts[which(d_fts %in% dr_fts)])
+print("Genes that were commonly selected in recipients and couples: ")
+print(r_fts[which(r_fts %in% dr_fts)])
+print("Genes that were commonly selected in donors, recipients and couples: ")
+print(Reduce(intersect, list(r_fts, d_fts, dr_fts)))
+```
+
+## Classifying primary versus secondary tolerant patients based on all the information:
+
+#### Threshold of 0.95
+
+We first combine the features that were selected as highly informative to 
+classify between primary and secondary tolerant patients from the couples, recipients 
+and donors into one big table:
+```{r, echo = FALSE}
+# couple info:
+load("../data/RNAseq/donors_and_recip/rna_dr_louis_PS_95.RData")
+# # add "couple_" in front of the feature names 
+# colnames2keep <- which(colnames(pctgs_sel_ft_couples_95) %in% c("group", "COUPLENUMBER"))
+# colnames(pctgs_sel_ft_couples_95)[-colnames2keep] <-
+#   gsub("X", "couple_", colnames(pctgs_sel_ft_couples_95)[-colnames2keep])
+# combine feature info with couple info about gender_comp...
+pctgs_couples <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER", "gender_comp", "age_recip") %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  inner_join(rna_dr_louis_PS_95 %>% 
+               rownames_to_column("COUPLENUMBER") %>% 
+               mutate(COUPLENUMBER = as.numeric(gsub("couple_","", COUPLENUMBER))), by = "COUPLENUMBER")
+
+# recip info:
+load("../data/RNAseq/recip_only/rna_recip_louis_PS.RData")
+colnames2keep <- which(colnames(rna_recip_louis_PS) %in% c("group"))
+colnames(rna_recip_louis_PS)[-colnames2keep] <-
+  paste0("R_", colnames(rna_recip_louis_PS)[-colnames2keep])
+pctgs_recip <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_recip_louis_PS %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R")
+
+# donor info :
+load("../data//RNAseq/donors_only/rna_donors_louis_PS_95.RData")
+colnames2keep <- which(colnames(rna_donors_louis_PS_95) %in% c("group"))
+colnames(rna_donors_louis_PS_95)[-colnames2keep] <-
+  paste0("D_", colnames(rna_donors_louis_PS_95)[-colnames2keep])
+pctgs_donor <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_donors_louis_PS_95 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R") 
+
+# combine :
+pctgs_all <- pctgs_couples %>% 
+  left_join(pctgs_recip, by = c("Id.Cryostem.R", "COUPLENUMBER", "group")) %>% 
+  left_join(pctgs_donor, by = c("COUPLENUMBER", "group"))
+```
+
+We can generate a PCA and a tSNE using all these features to see how the tolerant 
+and non tolerant patients are represented in the reduced dimensions:
+```{r, echo = FALSE}
+pctgs_all_only <- pctgs_all %>%
+  column_to_rownames("COUPLENUMBER") %>% 
+  dplyr::select_if(is.numeric) %>% 
+  dplyr::select(-"age_recip")
+
+pca_all <- prcomp(pctgs_all_only)
+```
+
+The 2 first components of the PCA seem to hold quite a lot of the variability in the data:
+```{r}
+plot(pca_all)
+```
+
+```{r, echo = FALSE}
+set.seed(1)
+pca_2plot <- as.data.frame(pca_all$x) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pca_all$x))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(group), label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  scale_color_manual(breaks = c("primary_tolerant", "secondary_tolerant"),
+                     values = c("springgreen3", "royalblue1")) +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+The primary tolerant patients seem to be situated more on the left of the 
+PCA, even though they are a bit mixed with the secondary tolerant patients.
+
+Along the second principal component, the patients are quite separated 
+according to the expression of the UTY gene in the donors:
+```{r, echo =FALSE}
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = D_UTY, label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+
+We can also generate a tSNE on the same data:
+```{r, echo = FALSE}
+set.seed(1)
+tsne_all <- Rtsne::Rtsne(pctgs_all_only, perplexity = 3)
+tsne_2plot <- as.data.frame(tsne_all$Y) %>% 
+  magrittr::set_colnames(c("X1", "X2")) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pctgs_all_only))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+
+ggplot(tsne_2plot, aes(x = X1, y = X2, col = as.factor(group), 
+                       label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  scale_color_manual(breaks = c("primary_tolerant", "secondary_tolerant"),
+                     values = c("springgreen3", "royalblue1")) +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+We can see if building a model using all these features combined leads to good
+classification results between tolerant and non tolerant patients:
+```{r, echo = FALSE}
+pctgs_all_RF <- pctgs_all %>% 
+  dplyr::select(-"COUPLENUMBER", -"gender_comp", -"age_recip") %>% 
+  mutate(group = as.factor(group)) %>% 
+  column_to_rownames("Id.Cryostem.R.x")
+
+set.seed(1)
+rf <- ranger::ranger(group~., data = pctgs_all_RF, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+It seems like we have extracted some information allowing us to classify the 
+primary tolerant patients as such. We can see which features were selected in 
+the model to classify primary from secondary tolerant patients in the Cryostem cohort:
+```{r, echo = FALSE}
+sort(rf$variable.importance, decreasing = TRUE)[1:20]
+```
+
+And visualise the top variables in a heatmap:
+```{r, echo = FALSE}
+mat2plot <- pctgs_all_RF[,c("group", names(sort(rf$variable.importance, decreasing = TRUE))[1:20])] %>% 
+  rownames_to_column("rownames") %>% 
+  arrange(group) %>% 
+  column_to_rownames("rownames")
+
+annot_patients <- as.data.frame(mat2plot$group)
+rownames(annot_patients) <- rownames(mat2plot)
+colnames(annot_patients) <- "group"
+ann_colors <- list(group = c(primary_tolerant = "springgreen3", 
+                             secondary_tolerant = "royalblue1"))
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = FALSE,
+                   cluster_cols = FALSE,
+                   main = "Heatmap with patients ordered by group",
+                   scale = "column")
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = TRUE,
+                   main = "Heatmap with patients clustered",
+                   scale = "column")
+```
+
+Finally, we can see which features were commonly selected between the recipients,
+donors and couples:
+
+```{r, echo = FALSE}
+recip_fts <- colnames(pctgs_all_RF)[grepl("R_", colnames(pctgs_all_RF))] 
+r_fts <- gsub("R_", "", recip_fts)
+
+donor_fts <- colnames(pctgs_all_RF)[grepl("D_", colnames(pctgs_all_RF))] 
+d_fts <- gsub("D_", "", donor_fts)
+
+couple_fts <- colnames(pctgs_all_RF)[grepl("subst_", colnames(pctgs_all_RF))] 
+dr_fts <- gsub("subst_", "", couple_fts)
+```
+
+```{r, echo = FALSE}
+df.venn <- data.frame(x = c(0, 0.866, -0.866),
+                      y = c(1, -0.5, -0.5),
+                      labels = c('recipients', 'donors', 'couples'))
+ggplot(df.venn) +
+  ggforce::geom_circle(aes(x0 = x, y0 = y, r = 1.5, fill = labels), alpha = .3, size = 1, colour = 'grey') +
+  coord_fixed() +
+  theme_void() +
+  theme(legend.position = 'bottom') +
+  scale_fill_manual(values = c('cornflowerblue', 'firebrick',  'gold')) +
+  scale_colour_manual(values = c('cornflowerblue', 'firebrick', 'gold'), guide = FALSE) +
+  labs(fill = NULL) +
+  annotate("text", x = c(0, 1.4, -1.4, 0.9, 0, -0.9, 0), 
+           y = c(1.4, -0.8, -0.8, 0.5, -1, 0.5, 0), 
+           label = c(length(r_fts) - (length(which(r_fts %in% d_fts)) + length(which(r_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(d_fts) - (length(which(d_fts %in% r_fts)) + length(which(d_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(dr_fts) - (length(which(dr_fts %in% d_fts)) + length(which(dr_fts %in% r_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(which(r_fts %in% d_fts)),
+                     length(which(d_fts %in% dr_fts)),
+                     length(which(r_fts %in% dr_fts)),
+                     
+                     length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))), 
+           size = 5)
+```
+
+```{r, echo = FALSE}
+print("Genes that were commonly selected in donors and recipients: ")
+print(r_fts[which(r_fts %in% d_fts)])
+print("Genes that were commonly selected in donors and couples: ")
+print(d_fts[which(d_fts %in% dr_fts)])
+print("Genes that were commonly selected in recipients and couples: ")
+print(r_fts[which(r_fts %in% dr_fts)])
+print("Genes that were commonly selected in donors, recipients and couples: ")
+print(Reduce(intersect, list(r_fts, d_fts, dr_fts)))
+```
+
+#### Threshold of 0.90
+
+We first combine the features that were selected as highly informative to 
+classify between primary and secondary tolerant patients from the couples, recipients 
+and donors into one big table:
+```{r, echo = FALSE}
+# couple info:
+load("../data/RNAseq/donors_and_recip/rna_dr_louis_PS_90.RData")
+# # add "couple_" in front of the feature names 
+# colnames2keep <- which(colnames(pctgs_sel_ft_couples_90) %in% c("group", "COUPLENUMBER"))
+# colnames(pctgs_sel_ft_couples_90)[-colnames2keep] <-
+#   gsub("X", "couple_", colnames(pctgs_sel_ft_couples_90)[-colnames2keep])
+# combine feature info with couple info about gender_comp...
+pctgs_couples <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER", "gender_comp", "age_recip") %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  inner_join(rna_dr_louis_PS_90 %>% 
+               rownames_to_column("COUPLENUMBER") %>% 
+               mutate(COUPLENUMBER = as.numeric(gsub("couple_","", COUPLENUMBER))), by = "COUPLENUMBER")
+
+# recip info:
+load("../data/RNAseq/recip_only/rna_recip_louis_PS_90.RData")
+colnames2keep <- which(colnames(rna_recip_louis_PS_90) %in% c("group"))
+colnames(rna_recip_louis_PS_90)[-colnames2keep] <-
+  paste0("R_", colnames(rna_recip_louis_PS_90)[-colnames2keep])
+pctgs_recip <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_recip_louis_PS_90 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R")
+
+# donor info :
+load("../data//RNAseq/donors_only/rna_donors_louis_PS_90.RData")
+colnames2keep <- which(colnames(rna_donors_louis_PS_90) %in% c("group"))
+colnames(rna_donors_louis_PS_90)[-colnames2keep] <-
+  paste0("D_", colnames(rna_donors_louis_PS_90)[-colnames2keep])
+pctgs_donor <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_donors_louis_PS_90 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R") 
+
+# combine :
+pctgs_all <- pctgs_couples %>% 
+  left_join(pctgs_recip, by = c("Id.Cryostem.R", "COUPLENUMBER", "group")) %>% 
+  left_join(pctgs_donor, by = c("COUPLENUMBER", "group"))
+```
+
+We can generate a PCA and a tSNE using all these features to see how the tolerant 
+and non tolerant patients are represented in the reduced dimensions:
+```{r, echo = FALSE}
+pctgs_all_only <- pctgs_all %>%
+  column_to_rownames("COUPLENUMBER") %>% 
+  dplyr::select_if(is.numeric) %>% 
+  dplyr::select(-"age_recip")
+
+pca_all <- prcomp(pctgs_all_only)
+```
+
+The 2 first components of the PCA seem to hold quite a lot of the variability in the data:
+```{r}
+plot(pca_all)
+```
+
+```{r, echo = FALSE}
+set.seed(1)
+pca_2plot <- as.data.frame(pca_all$x) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pca_all$x))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(group), label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  scale_color_manual(breaks = c("primary_tolerant", "secondary_tolerant"),
+                     values = c("springgreen3", "royalblue1")) +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+The primary tolerant patients seem to be situated more on the left of the 
+PCA, even though they are a bit mixed with the secondary tolerant patients.
+
+We can also generate a tSNE on the same data:
+```{r, echo = FALSE}
+set.seed(1)
+tsne_all <- Rtsne::Rtsne(pctgs_all_only, perplexity = 3)
+tsne_2plot <- as.data.frame(tsne_all$Y) %>% 
+  magrittr::set_colnames(c("X1", "X2")) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pctgs_all_only))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+
+ggplot(tsne_2plot, aes(x = X1, y = X2, col = as.factor(group), 
+                       label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  scale_color_manual(breaks = c("primary_tolerant", "secondary_tolerant"),
+                     values = c("springgreen3", "royalblue1")) +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+We can see if building a model using all these features combined leads to good
+classification results between tolerant and non tolerant patients:
+```{r, echo = FALSE}
+pctgs_all_RF <- pctgs_all %>% 
+  dplyr::select(-"COUPLENUMBER", -"gender_comp", -"age_recip") %>% 
+  mutate(group = as.factor(group)) %>% 
+  column_to_rownames("Id.Cryostem.R.x")
+
+set.seed(1)
+rf <- ranger::ranger(group~., data = pctgs_all_RF, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+It seems like we have extracted some information allowing us to classify the 
+primary tolerant patients as such. We can see which features were selected in 
+the model to classify primary from secondary tolerant patients in the Cryostem cohort:
+```{r, echo = FALSE}
+sort(rf$variable.importance, decreasing = TRUE)[1:20]
+```
+
+And visualise the top variables in a heatmap:
+```{r, echo = FALSE}
+mat2plot <- pctgs_all_RF[,c("group", names(sort(rf$variable.importance, decreasing = TRUE))[1:20])] %>% 
+  rownames_to_column("rownames") %>% 
+  arrange(group) %>% 
+  column_to_rownames("rownames")
+
+annot_patients <- as.data.frame(mat2plot$group)
+rownames(annot_patients) <- rownames(mat2plot)
+colnames(annot_patients) <- "group"
+ann_colors <- list(group = c(primary_tolerant = "springgreen3", 
+                             secondary_tolerant = "royalblue1"))
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = FALSE,
+                   cluster_cols = FALSE,
+                   main = "Heatmap with patients ordered by group",
+                   scale = "column")
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = TRUE,
+                   main = "Heatmap with patients clustered",
+                   scale = "column")
+```
+
+Finally, we can see which features were commonly selected between the recipients,
+donors and couples:
+
+```{r, echo = FALSE}
+recip_fts <- colnames(pctgs_all_RF)[grepl("R_", colnames(pctgs_all_RF))] 
+r_fts <- gsub("R_", "", recip_fts)
+
+donor_fts <- colnames(pctgs_all_RF)[grepl("D_", colnames(pctgs_all_RF))] 
+d_fts <- gsub("D_", "", donor_fts)
+
+couple_fts <- colnames(pctgs_all_RF)[grepl("subst_", colnames(pctgs_all_RF))] 
+dr_fts <- gsub("subst_", "", couple_fts)
+```
+
+
+```{r, eval = FALSE, echo = FALSE}
+# example Venndiagram
+df.venn <- data.frame(x = c(0, 0.866, -0.866),
+                      y = c(1, -0.5, -0.5),
+                      labels = c('donors', 'recipients', 'couples'))
+ggplot(df.venn) +
+  ggforce::geom_circle(aes(x0 = x, y0 = y, r = 1.5, fill = labels), alpha = .3, size = 1, colour = 'grey') +
+  coord_fixed() +
+  theme_void() +
+  theme(legend.position = 'bottom') +
+  scale_fill_manual(values = c('cornflowerblue', 'firebrick',  'gold')) +
+  scale_colour_manual(values = c('cornflowerblue', 'firebrick', 'gold'), guide = FALSE) +
+  labs(fill = NULL) +
+  annotate("text", x = c(0, 1.4, -1.4, 0.9, 0, -0.9, 0), 
+           y = c(1.4, -0.8, -0.8, 0.5, -1, 0.5, 0), 
+           label = c("A", "B", "C", "D", "E", "F", "G"), 
+           size = 5)
+```
+
+```{r, echo = FALSE}
+df.venn <- data.frame(x = c(0, 0.866, -0.866),
+                      y = c(1, -0.5, -0.5),
+                      labels = c('recipients', 'donors', 'couples'))
+ggplot(df.venn) +
+  ggforce::geom_circle(aes(x0 = x, y0 = y, r = 1.5, fill = labels), alpha = .3, size = 1, colour = 'grey') +
+  coord_fixed() +
+  theme_void() +
+  theme(legend.position = 'bottom') +
+  scale_fill_manual(values = c('cornflowerblue', 'firebrick',  'gold')) +
+  scale_colour_manual(values = c('cornflowerblue', 'firebrick', 'gold'), guide = FALSE) +
+  labs(fill = NULL) +
+  annotate("text", x = c(0, 1.4, -1.4, 0.9, 0, -0.9, 0), 
+           y = c(1.4, -0.8, -0.8, 0.5, -1, 0.5, 0), 
+           label = c(length(r_fts) - (length(which(r_fts %in% d_fts)) + length(which(r_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(d_fts) - (length(which(d_fts %in% r_fts)) + length(which(d_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(dr_fts) - (length(which(dr_fts %in% d_fts)) + length(which(dr_fts %in% r_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(which(r_fts %in% d_fts)),
+                     length(which(d_fts %in% dr_fts)),
+                     length(which(r_fts %in% dr_fts)),
+                     
+                     length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))), 
+           size = 5)
+```
+
+```{r, echo = FALSE}
+print("Genes that were commonly selected in donors and recipients: ")
+print(r_fts[which(r_fts %in% d_fts)])
+print("Genes that were commonly selected in donors and couples: ")
+print(d_fts[which(d_fts %in% dr_fts)])
+print("Genes that were commonly selected in recipients and couples: ")
+print(r_fts[which(r_fts %in% dr_fts)])
+print("Genes that were commonly selected in donors, recipients and couples: ")
+print(Reduce(intersect, list(r_fts, d_fts, dr_fts)))
+```
+
+#### Focusing only on the genes that had the same behaviour in the two cohorts:
+
+We first combine the features that were selected as highly informative to 
+classify between primary and secondary tolerant patients from the couples, recipients 
+and donors into one big table:
+```{r, echo = FALSE}
+# couple info:
+rna_dr_louis_PS_90 <- readRDS("../data/RNAseq/donors_and_recip/rna_dr_louis_beh_PS_90.RDS")
+pctgs_couples <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER", "gender_comp", "age_recip") %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  inner_join(rna_dr_louis_PS_90 %>% 
+               rownames_to_column("COUPLENUMBER") %>% 
+               mutate(COUPLENUMBER = as.numeric(gsub("couple_","", COUPLENUMBER))), by = "COUPLENUMBER")
+
+# recip info:
+load("../data/RNAseq/recip_only/rna_recip_louis_beh_PS_90.RData")
+colnames2keep <- which(colnames(rna_recip_louis_beh_PS_90) %in% c("group"))
+colnames(rna_recip_louis_beh_PS_90)[-colnames2keep] <-
+  paste0("R_", colnames(rna_recip_louis_beh_PS_90)[-colnames2keep])
+pctgs_recip <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_recip_louis_beh_PS_90 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R")
+
+# donor info :
+rna_donors_louis_PS_90 <- readRDS("../data//RNAseq/donors_only/rna_donor_louis_beh_PS_90.RDS")
+colnames2keep <- which(colnames(rna_donors_louis_PS_90) %in% c("group"))
+colnames(rna_donors_louis_PS_90)[-colnames2keep] <-
+  paste0("D_", colnames(rna_donors_louis_PS_90)[-colnames2keep])
+pctgs_donor <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_donors_louis_PS_90 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R") 
+
+# combine :
+pctgs_all <- pctgs_couples %>% 
+  left_join(pctgs_recip, by = c("Id.Cryostem.R", "COUPLENUMBER", "group")) %>% 
+  left_join(pctgs_donor, by = c("COUPLENUMBER", "group"))
+```
+
+We can generate a PCA and a tSNE using all these features to see how the tolerant 
+and non tolerant patients are represented in the reduced dimensions:
+```{r, echo = FALSE}
+pctgs_all_only <- pctgs_all %>%
+  column_to_rownames("COUPLENUMBER") %>% 
+  dplyr::select_if(is.numeric) %>% 
+  dplyr::select(-"age_recip")
+
+pca_all <- prcomp(pctgs_all_only)
+```
+
+The 2 first components of the PCA seem to hold quite a lot of the variability in the data:
+```{r}
+plot(pca_all)
+```
+
+```{r, echo = FALSE}
+set.seed(1)
+pca_2plot <- as.data.frame(pca_all$x) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pca_all$x))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+ggplot(pca_2plot, aes(x = PC1, y = PC2, col = as.factor(group), label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  scale_color_manual(breaks = c("primary_tolerant", "secondary_tolerant"),
+                     values = c("springgreen3", "royalblue1")) +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+The primary tolerant patients seem to be situated more on the left of the 
+PCA, even though they are a bit mixed with the secondary tolerant patients.
+
+We can also generate a tSNE on the same data:
+```{r, echo = FALSE}
+set.seed(1)
+tsne_all <- Rtsne::Rtsne(pctgs_all_only, perplexity = 3)
+tsne_2plot <- as.data.frame(tsne_all$Y) %>% 
+  magrittr::set_colnames(c("X1", "X2")) %>% 
+  mutate(COUPLENUMBER = as.numeric(rownames(pctgs_all_only))) %>% 
+  left_join(pctgs_all, by = "COUPLENUMBER")
+
+ggplot(tsne_2plot, aes(x = X1, y = X2, col = as.factor(group), 
+                       label = Id.Cryostem.R.x)) + 
+  geom_point() +
+  scale_color_manual(breaks = c("primary_tolerant", "secondary_tolerant"),
+                     values = c("springgreen3", "royalblue1")) +
+  geom_text(aes(label=Id.Cryostem.R.x),hjust=0, vjust=0)
+```
+
+We can see if building a model using all these features combined leads to good
+classification results between tolerant and non tolerant patients:
+```{r, echo = FALSE}
+pctgs_all_RF <- pctgs_all %>% 
+  dplyr::select(-"COUPLENUMBER", -"gender_comp", -"age_recip") %>% 
+  mutate(group = as.factor(group)) %>% 
+  column_to_rownames("Id.Cryostem.R.x")
+
+set.seed(1)
+rf <- ranger::ranger(group~., data = pctgs_all_RF, num.trees = 5000, importance = "impurity")
+rf$confusion.matrix
+paste0("prediction error: ", rf$prediction.error*100)
+```
+
+It seems like we have extracted some information allowing us to classify the 
+primary tolerant patients as such. We can see which features were selected in 
+the model to classify primary from secondary tolerant patients in the Cryostem cohort:
+```{r, echo = FALSE}
+sort(rf$variable.importance, decreasing = TRUE)[1:20]
+```
+
+And visualise the top variables in a heatmap:
+```{r, echo = FALSE}
+mat2plot <- pctgs_all_RF[,c("group", names(sort(rf$variable.importance, decreasing = TRUE))[1:20])] %>% 
+  rownames_to_column("rownames") %>% 
+  arrange(group) %>% 
+  column_to_rownames("rownames")
+
+annot_patients <- as.data.frame(mat2plot$group)
+rownames(annot_patients) <- rownames(mat2plot)
+colnames(annot_patients) <- "group"
+ann_colors <- list(group = c(primary_tolerant = "springgreen3", 
+                             secondary_tolerant = "royalblue1"))
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = FALSE,
+                   cluster_cols = FALSE,
+                   main = "Heatmap with patients ordered by group",
+                   scale = "column")
+
+pheatmap::pheatmap(mat2plot[,-which(colnames(mat2plot)=="group")], 
+                   annotation_row = annot_patients,
+                   annotation_colors = ann_colors[1],
+                   cluster_rows = TRUE,
+                   main = "Heatmap with patients clustered",
+                   scale = "column")
+```
+
+Finally, we can see which features were commonly selected between the recipients,
+donors and couples:
+
+```{r, echo = FALSE}
+recip_fts <- colnames(pctgs_all_RF)[grepl("R_", colnames(pctgs_all_RF))] 
+r_fts <- gsub("R_", "", recip_fts)
+
+donor_fts <- colnames(pctgs_all_RF)[grepl("D_", colnames(pctgs_all_RF))] 
+d_fts <- gsub("D_", "", donor_fts)
+
+couple_fts <- colnames(pctgs_all_RF)[grepl("subst_", colnames(pctgs_all_RF))] 
+dr_fts <- gsub("subst_", "", couple_fts)
+```
+
+
+```{r, eval = FALSE, echo = FALSE}
+# example Venndiagram
+df.venn <- data.frame(x = c(0, 0.866, -0.866),
+                      y = c(1, -0.5, -0.5),
+                      labels = c('donors', 'recipients', 'couples'))
+ggplot(df.venn) +
+  ggforce::geom_circle(aes(x0 = x, y0 = y, r = 1.5, fill = labels), alpha = .3, size = 1, colour = 'grey') +
+  coord_fixed() +
+  theme_void() +
+  theme(legend.position = 'bottom') +
+  scale_fill_manual(values = c('cornflowerblue', 'firebrick',  'gold')) +
+  scale_colour_manual(values = c('cornflowerblue', 'firebrick', 'gold'), guide = FALSE) +
+  labs(fill = NULL) +
+  annotate("text", x = c(0, 1.4, -1.4, 0.9, 0, -0.9, 0), 
+           y = c(1.4, -0.8, -0.8, 0.5, -1, 0.5, 0), 
+           label = c("A", "B", "C", "D", "E", "F", "G"), 
+           size = 5)
+```
+
+```{r, echo = FALSE}
+df.venn <- data.frame(x = c(0, 0.866, -0.866),
+                      y = c(1, -0.5, -0.5),
+                      labels = c('recipients', 'donors', 'couples'))
+ggplot(df.venn) +
+  ggforce::geom_circle(aes(x0 = x, y0 = y, r = 1.5, fill = labels), alpha = .3, size = 1, colour = 'grey') +
+  coord_fixed() +
+  theme_void() +
+  theme(legend.position = 'bottom') +
+  scale_fill_manual(values = c('cornflowerblue', 'firebrick',  'gold')) +
+  scale_colour_manual(values = c('cornflowerblue', 'firebrick', 'gold'), guide = FALSE) +
+  labs(fill = NULL) +
+  annotate("text", x = c(0, 1.4, -1.4, 0.9, 0, -0.9, 0), 
+           y = c(1.4, -0.8, -0.8, 0.5, -1, 0.5, 0), 
+           label = c(length(r_fts) - (length(which(r_fts %in% d_fts)) + length(which(r_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(d_fts) - (length(which(d_fts %in% r_fts)) + length(which(d_fts %in% dr_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(dr_fts) - (length(which(dr_fts %in% d_fts)) + length(which(dr_fts %in% r_fts)) +
+                                        length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))),
+                     length(which(r_fts %in% d_fts)),
+                     length(which(d_fts %in% dr_fts)),
+                     length(which(r_fts %in% dr_fts)),
+                     
+                     length(Reduce(intersect,list(r_fts,d_fts,dr_fts)))), 
+           size = 5)
+```
+
+```{r, echo = FALSE}
+print("Genes that were commonly selected in donors and recipients: ")
+print(r_fts[which(r_fts %in% d_fts)])
+print("Genes that were commonly selected in donors and couples: ")
+print(d_fts[which(d_fts %in% dr_fts)])
+print("Genes that were commonly selected in recipients and couples: ")
+print(r_fts[which(r_fts %in% dr_fts)])
+print("Genes that were commonly selected in donors, recipients and couples: ")
+print(Reduce(intersect, list(r_fts, d_fts, dr_fts)))
+```
