@@ -1,0 +1,1328 @@
+---
+title: "Integration of the three datatypes"
+author: "helena"
+date: "30/10/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r imports, echo=FALSE, results='hide', warning = FALSE}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(openxlsx)
+  library(BioGVHD)
+  library(data.table)
+  library(ggplot2)
+  library(igraph)
+})
+options("scipen"=100)
+```
+
+# Non versus tolerant patients:
+
+## Gather features selected in the CyTOF data
+
+CyTOF selected features, St Louis:
+
+#### Threshold of 0.90
+
+We first extract the metadata on the patients:
+```{r, echo = FALSE}
+load("/Users/helenatodorov/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/3_backbones/backbone_2_D&Rall/samp_rd.RData")
+
+complete_couples <- names(table(samp_rd$COUPLENUMBER))[which(table(samp_rd$COUPLENUMBER)==2)]
+couple_info <- samp_rd %>% 
+  arrange(COUPLENUMBER) %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) 
+  
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       gender_donors <- couple_info$GENDER[c(FALSE,TRUE)],
+       gender_donors <- couple_info$GENDER[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       gender_recip <- couple_info$GENDER[c(TRUE,FALSE)],
+       gender_recip <- couple_info$GENDER[c(FALSE,TRUE)])
+
+gender_comp <- paste0(gender_donors, gender_recip)
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       age_recip <- couple_info$DATEOFSAMPLE[c(TRUE, FALSE)] - couple_info$DOB[c(TRUE, FALSE)],
+       age_recip <- couple_info$DATEOFSAMPLE[c(FALSE, TRUE)] - couple_info$DOB[c(FALSE, TRUE)])
+
+couple_info <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2),
+         age_recip = rep(age_recip, each = 2)) %>% 
+  column_to_rownames("rownames")
+head(couple_info)
+
+```
+
+We first combine the features that were selected as highly informative to 
+classify between tolerant and non tolerant patients from the couples and 
+recipients into one big table.
+We focus only on the features that had the same behaviour in both cohorts:
+```{r, echo = FALSE}
+pctgs_all_cyto <- gather_RDR(data_couples = "../data/cyto/rd/pctgs_sel_ft_couples_TNT_90.RData",
+                              beh_couples = "../data/cyto/rd/perm_val_beh_TNT_90_thresh.xlsx",
+                              data_recip = "../data/cyto/log2/recip/pctgs_sel_ft_recip_TNT_90.RDS",
+                              beh_recip = "../data/cyto_national/log2/recip/perm_val_beh_TNT_90_thresh.xlsx",
+                              # data_donors = "../data/cyto/donors/pctgs_sel_ft_donor_TNT_90.RData",
+                              # beh_donors = "../data/cyto/donors/perm_val_beh_TNT_90_thresh.xlsx",
+                              couple_info = couple_info,
+                              couple_info_2keep = c("Id.Cryostem.R", "COUPLENUMBER", "gender_comp", "age_recip", "cmv_comp",
+                  "GROUPE"))
+```
+
+For MOFA, I can generate the matrix of recipients only first:
+```{r}
+bla <- readRDS("../data/cyto/log2/recip/pctgs_sel_ft_recip_TNT_90.RDS")
+pctgs_recip_cyto <- bla %>% 
+  select(-group)
+```
+
+
+I extract only the features of the patients to be able to work on them:
+```{r}
+pctgs_all_cyto_only <- pctgs_all_cyto %>%
+  column_to_rownames("Id.Cryostem.R") %>% 
+  dplyr::select_if(is.numeric) %>% 
+  dplyr::select(-"age_recip", -"COUPLENUMBER")
+
+```
+
+We can see which of these features are correlated and build a graph 
+to visualise them:
+```{r, eval = FALSE}
+# I add the group information
+pctgs_all_cyto_only <- pctgs_all_cyto_only %>% 
+  rownames_to_column("rn") %>% 
+  mutate(group = pctgs_all_cyto$group) %>% 
+  column_to_rownames("rn")
+
+plot_correlations(ft_df = pctgs_all_cyto_only, 
+                  compar = "TNT",
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto/recip/pctgs_sel_ft_recip_TNT_90.RData",
+                  pval_threshold = 0.001)
+```
+
+We can also see how the patients are correlated, based on these features:
+```{r, echo= FALSE}
+pctgs_all_tmp <- pctgs_all_cyto_only
+couple_info_cyto <- couple_info
+
+pctgs_all_tmp <- pctgs_all_tmp %>% 
+  select(-group)
+
+correlations <- t(pctgs_all_tmp) %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.95)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=rownames(pctgs_all_tmp))
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+color_nodes[which(pctgs_all_cyto_only$group == "tolerant")] <- "#0000FF80"
+
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+
+
+color_nodes <- rep("white", length(nodes$name))
+color_nodes[which(pctgs_all_cyto$cmv_comp == "01")] <- "azure3"
+color_nodes[which(pctgs_all_cyto$cmv_comp == 10)] <- "azure4"
+color_nodes[which(pctgs_all_cyto$cmv_comp == 11)] <- "black"
+
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+
+```
+
+## Gather features selected in the RNAseq data
+
+RNAseq selected features, St Louis:
+
+#### Threshold of 0.90
+
+We first extract the metadata on the patients:
+```{r, echo = FALSE}
+colData<-read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+colData <- colData[!is.na(colData$RNAseq.ID),] # remove rows with no RNAseq sample
+rownames(colData) <- colData$Id.Cryostem.R
+colnames(colData)[which(colnames(colData)=="RNA.INTEGRITY.NUMBER.(RIN)")] <- "RNA.INTEGRITY"
+complete_couples <- colData$COUPLENUMBER[which(duplicated(colData$COUPLENUMBER))]
+
+couple_info <- colData %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>%
+  mutate(DOB = as.Date(DOB, format = "%d.%m.%Y"),
+         DOG = as.Date(DOG, format = "%d.%m.%Y"))
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       gender_donors <- couple_info$GENDER[c(FALSE,TRUE)],
+       gender_donors <- couple_info$GENDER[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       gender_recip <- couple_info$GENDER[c(TRUE,FALSE)],
+       gender_recip <- couple_info$GENDER[c(FALSE,TRUE)])
+
+gender_comp <- paste0(gender_donors, gender_recip)
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       age_recip <- couple_info$DOG[c(TRUE, FALSE)] - couple_info$DOB[c(TRUE, FALSE)],
+       age_recip <- couple_info$DOG[c(FALSE, TRUE)] - couple_info$DOB[c(FALSE, TRUE)])
+
+couple_info <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         cmv_comp  = rep(cmv_comp, each = 2),
+         age_recip = rep(age_recip, each = 2)) %>% 
+  column_to_rownames("rownames")
+head(couple_info[,1:5])
+```
+
+We first combine the features that were selected as highly informative to 
+classify between tolerant and non tolerant patients from the couples, recipients 
+and donors into one big table:
+```{r, echo = FALSE}
+# couple info:
+load("../data/RNAseq/donors_and_recip/rna_dr_louis_TNT_90.RData")
+pctgs_couples <- couple_info %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER", "gender_comp", "age_recip",
+                "GROUPE", "ABO.incompatibility", "DISORDER_GROUP", "TBI",
+                "IS_ProphylaxisGVHD", "aGVHD", "cGVHD") %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  inner_join(rna_dr_louis_TNT_90 %>% 
+               rownames_to_column("COUPLENUMBER") %>% 
+               mutate(COUPLENUMBER = as.numeric(gsub("couple_","", COUPLENUMBER))), by = "COUPLENUMBER")
+
+# recip info:
+load("../data/RNAseq/recip_only/rna_recip_louis_TNT_90.RData")
+colnames2keep <- which(colnames(rna_recip_louis_TNT_90) %in% c("group"))
+colnames(rna_recip_louis_TNT_90)[-colnames2keep] <-
+  paste0("R_", colnames(rna_recip_louis_TNT_90)[-colnames2keep])
+pctgs_recip <- couple_info %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+  right_join(rna_recip_louis_TNT_90 %>%
+               rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R")
+
+# # donor info :
+# load("../data//RNAseq/donors_only/rna_donors_louis_TNT_90.RData")
+# colnames2keep <- which(colnames(rna_donors_louis_TNT_90) %in% c("group"))
+# colnames(rna_donors_louis_TNT_90)[-colnames2keep] <-
+#   paste0("D_", colnames(rna_donors_louis_TNT_90)[-colnames2keep])
+# pctgs_donor <- couple_info %>% 
+#   rownames_to_column("Id.Cryostem.R") %>% 
+#   dplyr::select("Id.Cryostem.R", "COUPLENUMBER") %>% 
+#   right_join(rna_donors_louis_TNT_90 %>%
+#                rownames_to_column("Id.Cryostem.R"), by = "Id.Cryostem.R") 
+
+# combine :
+pctgs_all_rna <- pctgs_couples %>% 
+  left_join(pctgs_recip, by = c("Id.Cryostem.R", "COUPLENUMBER", "group")) # %>% 
+  # left_join(pctgs_donor, by = c("COUPLENUMBER", "group"))
+```
+
+For MOFA, I can generate the matrix of recipients only first:
+```{r}
+load("../data/RNAseq/recip_only/rna_recip_louis_TNT_90.RData")
+pctgs_recip_rna <- rna_recip_louis_TNT_90 %>% 
+  select(-group)
+```
+
+I extract only the features of the patients to be able to work on them:
+```{r}
+pctgs_all_rna_only <- pctgs_all_rna %>%
+  column_to_rownames("Id.Cryostem.R") %>% 
+  dplyr::select_if(is.numeric) %>% 
+  dplyr::select(-"age_recip", -"COUPLENUMBER", -"aGVHD", -"cGVHD") %>% 
+  rownames_to_column("rn") %>% 
+  mutate(group = pctgs_all_rna$group) %>% 
+  column_to_rownames("rn")
+```
+
+We can see which of these features are correlated and build a graph 
+to visualise them:
+```{r, eval = FALSE}
+plot_correlations(ft_df = pctgs_all_rna_only, 
+                  compar = "TNT")
+```
+
+We can also see how the patients are correlated, based on these features:
+Again, we see the high CMV patients group together, as was observed with CyTOF data.
+```{r}
+pctgs_all_tmp <- pctgs_all_rna_only
+couple_info_rna <- couple_info
+
+pctgs_all_tmp <- pctgs_all_tmp %>% 
+  select(-group)
+
+correlations <- t(pctgs_all_tmp) %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.8)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=rownames(pctgs_all_tmp))
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+color_nodes[which(pctgs_all_rna$group == "tolerant")] <- "#0000FF80"
+
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+
+
+
+## Gather features selected in the metabolomics data
+
+Selected metabolites, in St Louis:
+
+#### Threshold of 0.90
+
+```{r load_data}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  dplyr::filter(!is.na(METABONAME)) %>% 
+  arrange(COUPLENUMBER) %>% 
+  column_to_rownames("METABONAME") %>% 
+  rownames_to_column("rn") %>% 
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("rn")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+couple_info <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2)) %>% 
+  column_to_rownames("rownames")
+```
+
+
+We first combine the features that were selected as highly informative to 
+classify between tolerant and non tolerant patients from the couples, recipients 
+and donors into one big table:
+```{r, echo = FALSE}
+# couple info:
+load("../data/metabo/r&d/metabo_ft_sel_rd_TNT_90.RData")
+pctgs_couples <- couple_info %>% 
+  rownames_to_column("METABONAME") %>% 
+  dplyr::select("Id.Cryostem.R","METABONAME", "COUPLENUMBER", "gender_comp", "age_recip") %>% 
+  dplyr::filter(grepl("R", rownames(couple_info))) %>% 
+  inner_join(metabo_ft_sel_rd_TNT_90 %>% 
+               rownames_to_column("COUPLENUMBER") %>% 
+               mutate(COUPLENUMBER = as.numeric(gsub("couple_", "", COUPLENUMBER))),
+             by = "COUPLENUMBER")
+
+# recip info:
+load("../data/metabo/recip/metabo_ft_sel_recip_TNT_90.RData")
+colnames2keep <- which(colnames(metabo_ft_sel_recip_TNT_90) %in% c("group"))
+colnames(metabo_ft_sel_recip_TNT_90)[-colnames2keep] <-
+  paste0("R_", colnames(metabo_ft_sel_recip_TNT_90)[-colnames2keep])
+pctgs_recip <- couple_info %>% 
+  rownames_to_column("METABONAME") %>% 
+  dplyr::select("COUPLENUMBER", "METABONAME") %>% 
+  right_join(metabo_ft_sel_recip_TNT_90 %>% 
+               rownames_to_column("METABONAME"), by = "METABONAME")
+
+# # donor info :
+# load("../data/metabo/donors/metabo_donor_louis_TNT.RData")
+# colnames2keep <- which(colnames(metabo_donor_louis_TNT) %in% c("group"))
+# colnames(metabo_donor_louis_TNT)[-colnames2keep] <-
+#   paste0("D_", colnames(metabo_donor_louis_TNT)[-colnames2keep])
+# pctgs_donor <- couple_info %>% 
+#   rownames_to_column("METABONAME") %>% 
+#   dplyr::select("METABONAME", "COUPLENUMBER") %>% 
+#   right_join(metabo_donor_louis_TNT %>% 
+#                rownames_to_column("METABONAME"), by = "METABONAME") 
+
+# combine :
+pctgs_all_metabo <- pctgs_couples %>% 
+  left_join(pctgs_recip, by = c("METABONAME", "COUPLENUMBER","group")) # %>% 
+  # left_join(pctgs_donor, by = c("COUPLENUMBER", "group")) %>% 
+  # dplyr::select(-"METABONAME.y", -"METABONAME.x")
+```
+
+For MOFA, I can generate the matrix of recipients only first:
+```{r}
+load("../data/metabo/recip/metabo_ft_sel_recip_TNT_90.RData")
+pctgs_recip_metabo <- metabo_ft_sel_recip_TNT_90 %>% 
+  select(-group)
+couple_inf_tmp <- couple_info[rownames(pctgs_recip_metabo),]
+rownames(pctgs_recip_metabo) <- couple_inf_tmp$Id.Cryostem.R
+```
+
+Merge the 3 recipients info of the 3 datatypes for MOFA:
+```{r}
+common_recips <- Reduce(intersect,list(rownames(pctgs_recip_cyto),
+                                       rownames(pctgs_recip_metabo),
+                                       rownames(pctgs_recip_rna)))
+
+list_recip <- list(cyto = pctgs_recip_cyto[common_recips,],
+                   metabo = pctgs_recip_metabo[common_recips,],
+                   rna = pctgs_recip_rna[common_recips,])
+save(list_recip, file = "~/Desktop/list_recip.RData")
+```
+
+We can generate a PCA and a tSNE using all these metabolites to see how the tolerant 
+and non tolerant patients are represented in the reduced dimensions:
+```{r}
+pctgs_all_metabo_only <- pctgs_all_metabo %>%
+  column_to_rownames("Id.Cryostem.R") %>% 
+  dplyr::select_if(is.numeric) %>% 
+  dplyr::select(-"age_recip", -"COUPLENUMBER") %>% 
+  rownames_to_column("rn") %>% 
+  mutate(group = pctgs_all_metabo$group) %>% 
+  column_to_rownames("rn")
+```
+
+We can see which of these features are correlated and build a graph 
+to visualise them:
+```{r, eval = FALSE}
+plot_correlations(ft_df = pctgs_all_metabo_only, 
+                  compar = "TNT")
+```
+
+
+We can also see how the patients are correlated, based on these features:
+```{r}
+pctgs_all_tmp <- pctgs_all_metabo_only
+couple_info_met <- couple_info
+
+pctgs_all_tmp <- pctgs_all_tmp %>% 
+  select(-group)
+
+correlations <- t(pctgs_all_tmp) %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.9)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=rownames(pctgs_all_tmp))
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+color_nodes[which(pctgs_all_metabo$group == "tolerant")] <- "#0000FF80"
+
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+
+## Merge features that we extracted from the RNAseq, metabolomics and CyTOF data
+
+### From the recipients only:
+
+I add a prefix ("cyt_", "rna_" or "met_") in front of the features names, and 
+I then merge all features together:
+```{r, echo = FALSE}
+colnames(pctgs_recip_cyto) <- paste0("cyt_", colnames(pctgs_recip_cyto))
+colnames(pctgs_recip_metabo) <- paste0("met_", colnames(pctgs_recip_metabo))
+colnames(pctgs_recip_rna) <- paste0("rna_", colnames(pctgs_recip_rna))
+
+pctgs_integ <- pctgs_recip_cyto %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  inner_join(pctgs_recip_metabo %>% rownames_to_column("Id.Cryostem.R") , by = c("Id.Cryostem.R")) %>% 
+  inner_join(pctgs_recip_rna %>% rownames_to_column("Id.Cryostem.R") , by = c("Id.Cryostem.R")) 
+print(paste0("We have information on the CyTOF, metabolomics and RNAseq data for ",
+             nrow(pctgs_integ), " patients in the St Louis cohort."))
+```
+
+We can first generate a PCA on the data:
+```{r, echo = FALSE}
+mat4pca <- pctgs_integ %>% 
+  select(-Id.Cryostem.R) %>%  
+  apply(2, scale) %>% 
+  as.matrix() 
+rownames(mat4pca) <- pctgs_integ$Id.Cryostem.R
+pca <- prcomp(mat4pca)
+```
+
+The first principal component seems to hold much more information that the others
+```{r}
+plot(pca)
+```
+
+Again, the first PC seems to nicely place the special CMV+ patients at 
+the very right of the PCA.
+```{r, echo = FALSE}
+complete_patients <- rownames(mat4pca)
+info_complete_patients <- pctgs_all_rna %>% 
+  dplyr::filter(Id.Cryostem.R %in% complete_patients) %>% 
+  select(1:12) 
+info_complete_patients$cmv_comp <- pctgs_all_cyto %>% 
+           dplyr::filter(Id.Cryostem.R %in% complete_patients) %>% 
+           select(cmv_comp)
+pca_2plot <- left_join(pctgs_integ, info_complete_patients, by = c("Id.Cryostem.R")) %>% 
+  mutate(PC1 = pca$x[,1],
+         PC2 = pca$x[,2],
+         PC3 = pca$x[,3],
+         PC4 = pca$x[,4])
+
+ggplot(pca_2plot, aes(x= PC1, y= PC2, col= group, label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+ggplot(pca_2plot, aes(x= PC1, y= PC2, col= cmv_comp[[1]], label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+How much of the principal components are driven by the different data types?
+```{r, echo = FALSE}
+pca_var <- pca$rotation %>% as.data.frame
+pca_ft <- rep("x", nrow(pca_var))
+pca_ft[grep("cyt_", rownames(pca_var))] <- "cyto"
+pca_ft[grep("met_", rownames(pca_var))] <- "metabo"
+pca_ft[grep("rna_", rownames(pca_var))] <- "rna"
+pca_var <- pca_var %>% 
+  rownames_to_column("rn") %>% 
+  mutate(feature_orig = pca_ft)
+```
+
+The RNAseq data variability was captured much more than the other data types.
+This is most probably due to the fact that we selected 914 genes, against
+88 metabolites and 53 CyTOF features only.
+```{r, echo = FALSE}
+pc1 <- pca_var %>% 
+  column_to_rownames("rn") %>% 
+  group_by(feature_orig) %>% 
+  summarise_all(sum)
+pc1m <- pc1 %>% gather(PC, value, -feature_orig) %>% 
+  mutate(label_ypos = round(value))
+
+pc1m_sub <- pc1m[1:24,]
+
+ggplot(data=pc1m_sub, aes(x=PC, y=value, fill=feature_orig)) +
+  geom_bar(stat="identity")+
+  # geom_text(aes(y=label_ypos, label=value), vjust=1.6, 
+  #           color="white", size=3.5)+
+  scale_fill_brewer(palette="Paired")+
+  theme_minimal()
+```
+
+We can see how these principal components are correlated with tolerance. 
+The first PC is very correlated with the tolerance. The PC4 also looks slightly 
+correlated with tolerance.
+```{r}
+barplot(abs(cor(pca$x[,1:8], as.numeric(pca_2plot$group))[,1]))
+```
+
+(Answering reviewers): we can see how the first and the fourth PCs are correlated 
+not only with cGvHD, but with the cGvHD status (mild or severe).
+```{r}
+info_tmp <- couple_inf_tmp %>% 
+  rownames_to_column("tmp") %>% 
+  column_to_rownames("Id.Cryostem.R")
+info_tmp <- info_tmp[pca_2plot$Id.Cryostem.R,]
+cGvHD_severity <- info_tmp$cGVHD_gradingmax
+
+```
+
+
+
+
+
+We can first look at the PC1:
+Features that are overexpressed in tolerant patients:
+```{r}
+plot(sort(pca$rotation[,1][which(pca$rotation[,1]<0)]))
+overexp <- sort(pca$rotation[,1][which(pca$rotation[,1]<0)])
+over <- as.data.frame(overexp)
+orig <- strsplit(rownames(over), "_")
+orig <- map(orig, function(x){x[1]}) %>% unlist
+over$orig <- orig
+ggplot(over, aes(x = orig, y = overexp, col = orig)) +
+  geom_boxplot() +
+  geom_jitter()
+# group_by feature origin (in pca_var), do box plots of importance per feature orig
+# also look at these features, per feature orig/ or per imprtance in PC1? 
+```
+
+Most important features overexpressed in tolerant patients in the first component:
+```{r}
+most_imp <- rownames(over)[which(over$overexp < -0.05)]
+imp_rna <- most_imp[grepl("rna", most_imp)]
+imp_rna <- lapply(imp_rna, function(name){
+  splited <- strsplit(name, "_")
+  splited[[1]][2]
+}) %>% unlist()
+imp_rna
+write.xlsx(imp_rna, file = "~/Desktop/rna.xlsx")
+
+imp_other <- most_imp[!grepl("rna", most_imp)]
+imp_other
+```
+
+Features that are overexpressed in non tolerant patients:
+```{r}
+plot(sort(pca$rotation[,1][which(pca$rotation[,1]>0)]))
+overexp <- sort(pca$rotation[,1][which(pca$rotation[,1]>0)])
+over <- as.data.frame(overexp)
+orig <- strsplit(rownames(over), "_")
+orig <- map(orig, function(x){x[1]}) %>% unlist
+over$orig <- orig
+ggplot(over, aes(x = orig, y = overexp, col = orig)) +
+  geom_boxplot() +
+  geom_jitter()
+# group_by feature origin (in pca_var), do box plots of importance per feature orig
+# also look at these features, per feature orig/ or per imprtance in PC1? 
+```
+
+Most important features overexpressed in non tolerant patients in the first component:
+```{r}
+most_imp <- rownames(over)[which(over$overexp > 0.04)]
+imp_rna <- most_imp[grepl("rna", most_imp)]
+imp_rna <- lapply(imp_rna, function(name){
+  splited <- strsplit(name, "_")
+  splited[[1]][3]
+}) %>% unlist()
+imp_rna
+
+imp_other <- most_imp[!grepl("rna", most_imp)]
+imp_other
+```
+
+### From the recipients and couples:
+
+I add a prefix ("cyt_", "rna_" or "met_") in front of the features names, and 
+I then merge all features together:
+```{r, echo = FALSE}
+colnames(pctgs_all_cyto_only)[-which(colnames(pctgs_all_cyto_only) == "group")] <-
+  paste0("cyt_", colnames(pctgs_all_cyto_only)[-which(colnames(pctgs_all_cyto_only) == "group")])
+colnames(pctgs_all_metabo_only)[-which(colnames(pctgs_all_metabo_only) == "group")] <-
+  paste0("met_", colnames(pctgs_all_metabo_only)[-which(colnames(pctgs_all_metabo_only) == "group")])
+colnames(pctgs_all_rna_only)[-which(colnames(pctgs_all_rna_only) == "group")] <-
+  paste0("rna_", colnames(pctgs_all_rna_only)[-which(colnames(pctgs_all_rna_only) == "group")])
+
+pctgs_integ <- pctgs_all_cyto_only %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  inner_join(pctgs_all_metabo_only %>% rownames_to_column("Id.Cryostem.R") , by = c("Id.Cryostem.R", "group")) %>% 
+  inner_join(pctgs_all_rna_only %>% rownames_to_column("Id.Cryostem.R") , by = c("Id.Cryostem.R", "group")) 
+print(paste0("We have information on the CyTOF, metabolomics and RNAseq data for ",
+             nrow(pctgs_integ), " patients in the St Louis cohort."))
+```
+
+We can first generate a PCA on the data:
+```{r, echo = FALSE}
+mat4pca <- pctgs_integ %>% 
+  select(-group, -Id.Cryostem.R) %>%  
+  apply(2, scale) %>% 
+  as.matrix() 
+rownames(mat4pca) <- pctgs_integ$Id.Cryostem.R
+pca <- prcomp(mat4pca, scale. = TRUE)
+```
+
+The first principal component seems to hold much more information that the others
+```{r}
+plot(pca)
+```
+
+Again, the first PC seems to nicely place the special CMV+ patients at 
+the very right of the PCA.
+```{r, echo = FALSE}
+complete_patients <- rownames(mat4pca)
+info_complete_patients <- pctgs_all_rna %>% 
+  filter(Id.Cryostem.R %in% complete_patients) %>% 
+  select(1:12) 
+info_complete_patients$cmv_comp <- pctgs_all_cyto %>% 
+           filter(Id.Cryostem.R %in% complete_patients) %>% 
+           select(cmv_comp)
+pca_2plot <- left_join(pctgs_integ, info_complete_patients, by = c("Id.Cryostem.R", "group")) %>% 
+  mutate(PC1 = pca$x[,1],
+         PC2 = pca$x[,2],
+         PC3 = pca$x[,3],
+         PC4 = pca$x[,4])
+
+ggplot(pca_2plot, aes(x= PC1, y= PC2, col= group, label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+ggplot(pca_2plot, aes(x= PC1, y= PC2, col= cmv_comp[[1]], label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+How much of the principal components are driven by the different data types?
+```{r, echo = FALSE}
+pca_var <- pca$rotation %>% as.data.frame
+pca_ft <- rep("x", nrow(pca_var))
+pca_ft[grep("cyt_", rownames(pca_var))] <- "cyto"
+pca_ft[grep("met_", rownames(pca_var))] <- "metabo"
+pca_ft[grep("rna_", rownames(pca_var))] <- "rna"
+pca_var <- pca_var %>% 
+  rownames_to_column("rn") %>% 
+  mutate(feature_orig = pca_ft)
+```
+
+The RNAseq data variability was captured much more than the other data types.
+This is most probably due to the fact that we selected 914 genes, against
+88 metabolites and 53 CyTOF features only.
+```{r, echo = FALSE}
+pc1 <- pca_var %>% 
+  column_to_rownames("rn") %>% 
+  group_by(feature_orig) %>% 
+  summarise_all(sum)
+pc1m <- pc1 %>% gather(PC, value, -feature_orig) %>% 
+  mutate(label_ypos = round(value))
+
+pc1m_sub <- pc1m[1:24,]
+
+ggplot(data=pc1m_sub, aes(x=PC, y=value, fill=feature_orig)) +
+  geom_bar(stat="identity")+
+  # geom_text(aes(y=label_ypos, label=value), vjust=1.6, 
+  #           color="white", size=3.5)+
+  scale_fill_brewer(palette="Paired")+
+  theme_minimal()
+```
+
+We can see how these principal components are correlated with tolerance. 
+The first PC is very correlated with the tolerance. The PC4 also looks slightly 
+correlated with tolerance.
+```{r}
+barplot(abs(cor(pca$x[,1:8], as.numeric(pca_2plot$group))[,1]))
+```
+
+We can first look at the PC1:
+Features that are overexpressed in tolerant patients:
+```{r}
+plot(sort(pca$rotation[,1][which(pca$rotation[,1]<0)]))
+overexp <- sort(pca$rotation[,1][which(pca$rotation[,1]<0)])
+over <- as.data.frame(overexp)
+orig <- strsplit(rownames(over), "_")
+orig <- map(orig, function(x){x[1]}) %>% unlist
+over$orig <- orig
+ggplot(over, aes(x = orig, y = overexp, col = orig)) +
+  geom_boxplot() +
+  geom_jitter()
+# group_by feature origin (in pca_var), do box plots of importance per feature orig
+# also look at these features, per feature orig/ or per imprtance in PC1? 
+```
+
+Most important features overexpressed in tolerant patients in the first component:
+```{r}
+most_imp <- rownames(over)[which(over$overexp < -0.05)]
+imp_rna <- most_imp[grepl("rna", most_imp)]
+imp_rna <- lapply(imp_rna, function(name){
+  splited <- strsplit(name, "_")
+  splited[[1]][3]
+}) %>% unlist()
+imp_rna
+write.xlsx(imp_rna, file = "~/Desktop/rna.xlsx")
+
+imp_other <- most_imp[!grepl("rna", most_imp)]
+imp_other
+```
+
+Features that are overexpressed in non tolerant patients:
+```{r}
+plot(sort(pca$rotation[,1][which(pca$rotation[,1]>0)]))
+overexp <- sort(pca$rotation[,1][which(pca$rotation[,1]>0)])
+over <- as.data.frame(overexp)
+orig <- strsplit(rownames(over), "_")
+orig <- map(orig, function(x){x[1]}) %>% unlist
+over$orig <- orig
+ggplot(over, aes(x = orig, y = overexp, col = orig)) +
+  geom_boxplot() +
+  geom_jitter()
+# group_by feature origin (in pca_var), do box plots of importance per feature orig
+# also look at these features, per feature orig/ or per imprtance in PC1? 
+```
+
+Most important features overexpressed in non tolerant patients in the first component:
+```{r}
+most_imp <- rownames(over)[which(over$overexp > 0.04)]
+imp_rna <- most_imp[grepl("rna", most_imp)]
+imp_rna <- lapply(imp_rna, function(name){
+  splited <- strsplit(name, "_")
+  splited[[1]][3]
+}) %>% unlist()
+imp_rna
+
+imp_other <- most_imp[!grepl("rna", most_imp)]
+imp_other
+```
+
+The second PC seems to be slightly correlated with aGVHD and ABO.incompatibility:
+
+```{r}
+totest <- pca_2plot[,738:744]
+totest <- apply(totest, 2, function(x){as.numeric(as.factor(x))})
+barplot(abs(cor(pca$x[,2], totest)), horiz = TRUE, las = 2, cex.names = 0.5)
+```
+
+
+Which are the most important features on the 1st PCA axis?
+```{r}
+pca_imp <- sort(abs(pca$rotation[,1]))
+top_100 <- names(pca_imp[(length(pca_imp)-20) : length(pca_imp)])
+ade4::s.arrow(pca$rotation[top_100,1:2], boxes = F, clabel = 0.5)
+```
+
+```{r}
+ggplot(as.data.frame(pca_2plot), aes(x= PC3, y= PC4, col= group, label = Id.Cryostem.R)) + 
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+
+In order to be more fair to the different data types, I first apply PCA to each
+data type separately and then merge the different principal components.
+
+#### CyTOF:
+```{r}
+cyt4pca <- pctgs_all_cyto_only %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(Id.Cryostem.R %in% pctgs_integ$Id.Cryostem.R) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  select(-group)
+pca_cyto <- ade4::dudi.pca(cyt4pca, nf = 5, scannf = F)
+```
+
+Variability captured by each component:
+```{r}
+plot(pca_cyto$eig, pch = 19)
+```
+
+The non tolerant patients seem to be situated more on the right of the PCA.
+The couples for which the donor and the recipient both had CMV also seem to 
+be more situated on the right of the PCA.
+```{r}
+#information on the patients: 
+info_pca <- info_complete_patients %>% column_to_rownames("Id.Cryostem.R")
+info_pca <- info_pca[rownames(cyt4pca),]
+ade4::s.class(pca_cyto$li, info_pca$group, col=c("red", "blue"))
+ade4::s.class(pca_cyto$li, as.factor(info_pca$cmv_comp$cmv_comp), 
+              col = c("blue", "lightblue", "lightgreen", "green3"))
+```
+
+```{r}
+keep1 <- order(abs(pca_cyto$c1$CS1), decreasing = T)[1:20]
+# keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5]
+# tokeep <- unique(c(keep1, keep2))
+tokeep <- keep1
+ade4::s.arrow(pca_cyto$c1[tokeep,], boxes = F, clabel = 0.5)
+```
+
+!! It's the same information on the right and on the left of the PCA
+(CD38 overexpressed in cluster 10 in the recipients, on the right of the PCA,
+= CD38 very negative in D-R in cluster 10 in couples, on the left of the PCA).
+
+
+<!-- #### PCA only on the features from donors and recipients: -->
+
+<!-- ```{r} -->
+<!-- cyt4pca <- pctgs_all_only_cyto %>% -->
+<!--   rownames_to_column("Id.Cryostem.R") %>% -->
+<!--   filter(Id.Cryostem.R %in% pctgs_integ$Id.Cryostem.R) %>% -->
+<!--   column_to_rownames("Id.Cryostem.R") %>% -->
+<!--   select(-group) -->
+<!-- couple_features <- grep("couple_", colnames(cyt4pca)) -->
+<!-- cyt4pca2 <- cyt4pca[,-couple_features] -->
+<!-- pca_cyto <- ade4::dudi.pca(cyt4pca2, nf = 5, scannf = F) -->
+<!-- ``` -->
+
+<!-- The non tolerant patients seem to be situated more on the right of the PCA. -->
+<!-- The couples for which the donor and the recipient both had CMV also seem to -->
+<!-- be more situated on the right of the PCA. -->
+<!-- ```{r} -->
+<!-- ade4::s.class(pca_cyto$li, info_pca$group, col=c("red", "blue")) -->
+<!-- ade4::s.class(pca_cyto$li, as.factor(info_pca$cmv_comp$cmv_comp), -->
+<!--               col = c("blue", "lightblue", "lightgreen", "green3")) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- toplot <- pca_cyto$li %>% rownames_to_column("rn") %>%  -->
+<!--   mutate(group = info_pca$group) -->
+<!-- ggplot(toplot, aes(x = Axis1, y = Axis2, label = rn, col = group)) + -->
+<!--   geom_point() + -->
+<!--   geom_text(aes(label=rn),hjust=0, vjust=0) -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- keep1 <- order(abs(pca_cyto$c1$CS1), decreasing = T)[1:20] -->
+<!-- # keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5] -->
+<!-- # tokeep <- unique(c(keep1, keep2)) -->
+<!-- tokeep <- keep1 -->
+<!-- ade4::s.arrow(pca_cyto$c1[tokeep,], boxes = F, clabel = 0.5) -->
+<!-- ``` -->
+
+
+#### Metabo:
+```{r}
+met4pca <- pctgs_all_metabo_only %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(Id.Cryostem.R %in% pctgs_integ$Id.Cryostem.R) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  select(-group)
+pca_metabo <- ade4::dudi.pca(met4pca, nf = 5, scannf = F)
+```
+
+```{r}
+plot(pca_metabo$eig, pch = 19)
+```
+
+
+The non tolerant patients seem to be situated more on the right of the PCA.
+The couples for which the donor and the recipient both had CMV also seem to 
+be more situated on the right of the PCA.
+```{r}
+#information on the patients: 
+info_pca <- info_complete_patients %>% column_to_rownames("Id.Cryostem.R")
+info_pca <- info_pca[rownames(met4pca),]
+ade4::s.class(pca_metabo$li, info_pca$group, col=c("red", "blue"))
+ade4::s.class(pca_metabo$li, as.factor(info_pca$cmv_comp$cmv_comp), 
+              col = c("blue", "lightblue", "lightgreen", "green3"))
+```
+
+```{r}
+keep1 <- order(abs(pca_metabo$c1$CS1), decreasing = T)[1:20]
+# keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5]
+# tokeep <- unique(c(keep1, keep2))
+tokeep <- keep1
+ade4::s.arrow(pca_metabo$c1[tokeep,], boxes = F, clabel = 0.5)
+```
+
+<!-- #### PCA only on the features from donors and recipients: -->
+
+<!-- ```{r} -->
+<!-- met4pca <- pctgs_all_only_met %>%  -->
+<!--   rownames_to_column("Id.Cryostem.R") %>%  -->
+<!--   filter(Id.Cryostem.R %in% pctgs_integ$Id.Cryostem.R) %>%  -->
+<!--   column_to_rownames("Id.Cryostem.R") %>%  -->
+<!--   select(-group)  -->
+<!-- couple_features <- grep("subst_", colnames(met4pca)) -->
+<!-- met4pca2 <- met4pca[,-couple_features] -->
+<!-- pca_cyto <- ade4::dudi.pca(met4pca2, nf = 5, scannf = F) -->
+<!-- ``` -->
+
+<!-- The non tolerant patients seem to be situated more on the right of the PCA. -->
+<!-- The couples for which the donor and the recipient both had CMV also seem to  -->
+<!-- be more situated on the right of the PCA. -->
+<!-- ```{r} -->
+<!-- ade4::s.class(pca_cyto$li, info_pca$group, col=c("red", "blue")) -->
+<!-- ade4::s.class(pca_cyto$li, as.factor(info_pca$cmv_comp$cmv_comp),  -->
+<!--               col = c("blue", "lightblue", "lightgreen", "green3")) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- toplot <- pca_cyto$li %>% rownames_to_column("rn") %>%  -->
+<!--   mutate(group = info_pca$group) -->
+<!-- ggplot(toplot, aes(x = Axis1, y = Axis2, label = rn, col = group)) + -->
+<!--   geom_point() + -->
+<!--   geom_text(aes(label=rn),hjust=0, vjust=0) -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- keep1 <- order(abs(pca_cyto$c1$CS1), decreasing = T)[1:20] -->
+<!-- # keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5] -->
+<!-- # tokeep <- unique(c(keep1, keep2)) -->
+<!-- tokeep <- keep1 -->
+<!-- ade4::s.arrow(pca_cyto$c1[tokeep,], boxes = F, clabel = 0.5) -->
+<!-- ``` -->
+
+#### RNAseq:
+```{r}
+rna4pca <- pctgs_all_rna_only %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(Id.Cryostem.R %in% pctgs_integ$Id.Cryostem.R) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  select(-group)
+pca_rna <- ade4::dudi.pca(rna4pca, nf = 5, scannf = F)
+```
+
+```{r}
+plot(pca_rna$eig, pch = 19)
+```
+
+
+The non tolerant patients seem to be situated more on the right of the PCA.
+The couples for which the donor and the recipient both had CMV also seem to 
+be more situated on the right of the PCA.
+```{r}
+#information on the patients: 
+info_pca <- info_complete_patients %>% column_to_rownames("Id.Cryostem.R")
+info_pca <- info_pca[rownames(rna4pca),]
+ade4::s.class(pca_rna$li, info_pca$group, col=c("red", "blue"))
+ade4::s.class(pca_rna$li, as.factor(info_pca$cmv_comp$cmv_comp), 
+              col = c("blue", "lightblue", "lightgreen", "green3"))
+```
+
+```{r}
+keep1 <- order(abs(pca_rna$c1$CS1), decreasing = T)[1:20]
+# keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5]
+# tokeep <- unique(c(keep1, keep2))
+tokeep <- keep1
+ade4::s.arrow(pca_rna$c1[tokeep,], boxes = F, clabel = 0.5)
+```
+
+<!-- #### PCA only on the features from donors and recipients: -->
+
+<!-- ```{r} -->
+<!-- rna4pca <- pctgs_all_only_rna %>%  -->
+<!--   rownames_to_column("Id.Cryostem.R") %>%  -->
+<!--   filter(Id.Cryostem.R %in% pctgs_integ$Id.Cryostem.R) %>%  -->
+<!--   column_to_rownames("Id.Cryostem.R") %>%  -->
+<!--   select(-group)  -->
+<!-- couple_features <- grep("subst_", colnames(rna4pca)) -->
+<!-- rna4pca2 <- rna4pca[,-couple_features] -->
+<!-- pca_cyto <- ade4::dudi.pca(rna4pca2, nf = 5, scannf = F) -->
+<!-- ``` -->
+
+<!-- The non tolerant patients seem to be situated more on the right of the PCA. -->
+<!-- The couples for which the donor and the recipient both had CMV also seem to  -->
+<!-- be more situated on the right of the PCA. -->
+<!-- ```{r} -->
+<!-- ade4::s.class(pca_cyto$li, info_pca$group, col=c("red", "blue")) -->
+<!-- ade4::s.class(pca_cyto$li, as.factor(info_pca$cmv_comp$cmv_comp),  -->
+<!--               col = c("blue", "lightblue", "lightgreen", "green3")) -->
+<!-- ``` -->
+
+<!-- ```{r} -->
+<!-- toplot <- pca_cyto$li %>% rownames_to_column("rn") %>%  -->
+<!--   mutate(group = info_pca$group) -->
+<!-- ggplot(toplot, aes(x = Axis1, y = Axis2, label = rn, col = group)) + -->
+<!--   geom_point() + -->
+<!--   geom_text(aes(label=rn),hjust=0, vjust=0) -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- keep1 <- order(abs(pca_cyto$c1$CS1), decreasing = T)[1:20] -->
+<!-- # keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5] -->
+<!-- # tokeep <- unique(c(keep1, keep2)) -->
+<!-- tokeep <- keep1 -->
+<!-- ade4::s.arrow(pca_cyto$c1[tokeep,], boxes = F, clabel = 0.5) -->
+<!-- ``` -->
+
+
+## Integrative PCA:
+
+We can take the main PCs from every data type:
+```{r}
+pcs_cyto <- pca_cyto$li %>% 
+  magrittr::set_colnames(paste0("cyto_PC", 1:5))
+pcs_metabo <- pca_metabo$li %>% 
+  magrittr::set_colnames(paste0("metabo_PC", 1:5))
+pcs_rna <- pca_rna$li %>% 
+  magrittr::set_colnames(paste0("rna_PC", 1:5))
+
+all_pcs <- cbind(pcs_cyto, pcs_metabo, pcs_rna)
+
+pca_integ <- ade4::dudi.pca(all_pcs, nf = 5, scannf = F, scale = F, center = F)
+```
+
+```{r}
+plot(pca_integ$eig, pch = 19)
+```
+
+```{r}
+#information on the patients: 
+info_pca <- info_complete_patients %>% column_to_rownames("Id.Cryostem.R")
+info_pca <- info_pca[rownames(pca_integ$li),]
+ade4::s.class(pca_integ$li, info_pca$group, col=c("red", "blue"))
+ade4::s.class(pca_integ$li, as.factor(info_pca$cmv_comp$cmv_comp), 
+              col = c("blue", "lightblue", "lightgreen", "green3"))
+```
+
+```{r}
+keep1 <- order(abs(pca_integ$c1$CS1), decreasing = T)
+# keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5]
+# tokeep <- unique(c(keep1, keep2))
+tokeep <- keep1
+ade4::s.arrow(pca_integ$c1[tokeep,], boxes = F, clabel = 0.5)
+```
+
+## Correlations between features:
+
+```{r}
+pctgs_tmp <- pctgs_integ %>% 
+  column_to_rownames("Id.Cryostem.R") 
+correlations <- pctgs_tmp %>% 
+  select(-group) %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, 
+                            vertices=colnames(pctgs_tmp)[-which(colnames(pctgs_tmp)=="group")])
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+
+gr_medians <- pctgs_tmp %>%
+      group_by(group) %>%
+      summarize_if(is.numeric, median) %>%
+      as.data.frame() 
+    rownames(gr_medians) <- gr_medians$group
+
+medians <- gr_medians[,nodes$name]
+for (gene in seq_along(colnames(medians))){
+  if (medians["tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#0000FF80"
+  }
+}
+
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                 min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+comps <- lapply(which(comp_sizes != 0), function(i){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+})
+
+
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+```
+
+Plot 1st connected component:
+```{r}
+ft_in_comp1 <- which(nodes$name %in% comps[[1]])
+plot(gr_components[[1]], vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes[ft_in_comp1], layout = layout_nicely)
+```
+
+Plot 2nd connected component:
+```{r}
+con_comps <- which(comp_sizes != 0)
+ft_in_comp2 <- which(nodes$name %in% comps[[2]])
+plot(gr_components[[con_comps[[2]]]], vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes[ft_in_comp2], layout = layout_nicely)
+```
+
+Plot 4th connected component:
+```{r}
+idx <- 3
+con_comps <- which(comp_sizes != 0)
+ft_in_comp <- which(nodes$name %in% comps[[idx]])
+plot(gr_components[[con_comps[[idx]]]], vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes[ft_in_comp], layout = layout_nicely)
+```
+
+## Generate graphs on the complete couples only
+
+We can plot the graphs containing only the couples for which we had metabolomics,
+CyTOF and RNAseq data:
+```{r}
+common_patients <- Reduce(intersect,list(rownames(pctgs_all_only_cyt),
+                                         rownames(pctgs_all_only_rna),
+                                         rownames(pctgs_all_only_met)))
+
+pctgs_all_only_cytf <- pctgs_all_only_cyt[common_patients,]
+pctgs_all_cytf <- pctgs_all_cyt[which(rownames(pctgs_all_only_cyt) %in% 
+                                                         common_patients),]
+couple_info_cytf <- couple_info_cyt[common_patients,]
+
+correlations <- t(pctgs_all_only_cytf) %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=rownames(pctgs_all_only_cytf))
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+color_nodes[which(pctgs_all_cytf$group.x == "tolerant")] <- "#0000FF80"
+
+vars2test <- c("GROUP", "gender_comp", "age_recip", "GROUPE", 
+               "ABO.incompatibility", "DISORDER_GROUP", "TBI",
+                "IS_ProphylaxisGVHD", "aGVHD", "cGVHD")
+
+# for( var in vars2test){
+#   set.seed(1)
+#   if(var=="age_recip"){
+#     gr_tmp <- gr
+#     color_nodes = as.numeric(couple_info_rna[nodes$name,"age_recip"])
+#     V(gr_tmp)$color <- as.numeric(color_nodes)
+#     gr_tmp$palette <- grey.colors(100)
+#     set.seed(1)
+#     plot(gr_tmp)
+#   } else {
+#     color_nodes = as.factor(couple_info_rna[nodes$name,var])
+#     plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+#          vertex.color = color_nodes, layout = layout_nicely, main = var)
+#   }
+# }
+
+for(seed in 6){
+  set.seed(seed)
+  plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+       vertex.color = color_nodes, layout = layout_nicely, main = "group")
+}
+
+
+
+```
+
+I save the cytof graph:
+```{r}
+patients_graph <- correlated_features %>% 
+  mutate(type = rep("CyTOF", nrow(correlated_features)))
+```
+
+
+```{r}
+common_patients <- Reduce(intersect,list(rownames(pctgs_all_only_cyt),
+                                         rownames(pctgs_all_only_rna),
+                                         rownames(pctgs_all_only_met)))
+
+pctgs_all_only_rnaf <- pctgs_all_only_rna[common_patients,]
+pctgs_all_rnaf <- pctgs_all_rna[which(rownames(pctgs_all_only_rna) %in% 
+                                                         common_patients),]
+couple_info_rnaf <- couple_info_rna[common_patients,]
+
+correlations <- t(pctgs_all_only_rnaf) %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.85)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=rownames(pctgs_all_only_rnaf))
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+color_nodes[which(pctgs_all_rnaf$group == "tolerant")] <- "#0000FF80"
+
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+
+# for(seed in 201:220){
+#   set.seed(seed)
+#   plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+#      vertex.color = color_nodes, layout = layout_nicely)
+# }
+
+# dev.off()
+
+```
+
+I save the metabo graph:
+```{r}
+patients_graph_tmp <- correlated_features %>% 
+  mutate(type = rep("Metabo", nrow(correlated_features)))
+
+patients_graph <- rbind(patients_graph, patients_graph_tmp)
+```
+
+```{r}
+common_patients <- Reduce(intersect,list(rownames(pctgs_all_only_cyt),
+                                         rownames(pctgs_all_only_rna),
+                                         rownames(pctgs_all_only_met)))
+
+pctgs_all_only_metf <- pctgs_all_only_met[common_patients,]
+pctgs_all_metf <- pctgs_all_met[which(rownames(pctgs_all_only_met) %in% 
+                                                         common_patients),]
+couple_info_metf <- couple_info_met[common_patients,]
+
+correlations <- t(pctgs_all_only_metf) %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.87)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=rownames(pctgs_all_only_metf))
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+color_nodes[which(pctgs_all_metf$group == "tolerant")] <- "#0000FF80"
+
+set.seed(1)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, layout = layout_nicely)
+# dev.off()
+
+```
+
+I save the metabo graph:
+```{r}
+patients_graph_tmp <- correlated_features %>% 
+  mutate(type = rep("RNAseq", nrow(correlated_features)))
+
+patients_graph <- rbind(patients_graph, patients_graph_tmp)
+
+write_tsv(patients_graph, path = "~/Desktop/graph.tsv")
+
+```
+
+I also save information on the patients to plot in the graph:
+```{r}
+patients_info <- couple_info %>% 
+  rownames_to_column("METABONAME") %>% 
+  dplyr::select("Id.Cryostem.R", "COUPLENUMBER", "gender_comp", "age_recip",
+                "GROUPE", "ABO.incompatibility", "DISORDER_GROUP", "TBI",
+                "IS_ProphylaxisGVHD", "aGVHD", "cGVHD", "GROUP") %>% 
+  dplyr::filter(Id.Cryostem.R %in% common_patients)
+
+write_tsv(patients_info, path = "~/Desktop/nodes_info.tsv")
+```

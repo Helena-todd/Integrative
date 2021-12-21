@@ -1,0 +1,31 @@
+---
+title: "Integration using MOFA"
+author: "helena"
+date: "30/10/2019"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r imports, echo=FALSE, results='hide', warning = FALSE}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(openxlsx)
+  library(BioGVHD)
+  library(data.table)
+  library(ggplot2)
+  library(igraph)
+  library()
+})
+options("scipen"=100)
+```
+
+# Tolerance vs non tolerance
+
+## Create the data
+
+I gather the features that were selected as highly informative in the CyTOF, 
+RNAseq and metabolomics data, and I apply MOFA on them.
+

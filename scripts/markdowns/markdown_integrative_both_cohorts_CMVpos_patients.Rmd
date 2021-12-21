@@ -1,0 +1,2166 @@
+---
+title: "Integration_2_cohorts"
+author: "helena"
+date: "02/04/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r imports, echo=FALSE, results='hide', warning = FALSE}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(openxlsx)
+  library(BioGVHD)
+  library(data.table)
+  library(ggplot2)
+  library(igraph)
+})
+options("scipen"=100)
+```
+
+# Features extracted from the comparison of tolerant and non-tolerant patients
+
+## St Louis cohort
+
+For the patients from the St Louis cohort, I extract the CyTOF, metabo and 
+transcriptomics features that had the same behaviour in both cohorts:
+
+```{r}
+ft_integ_louis <- readRDS("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/integ/cyt_met_rna_beh_features.RDS")
+```
+
+I extract the metadata (age, gender, ...) for the St Louis cohort
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(METABONAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  column_to_rownames("METABONAME") %>% 
+  rownames_to_column("rn") %>% 
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("rn")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_louis <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+recip_info_louis <- couple_info_louis %>% 
+  dplyr::filter(Id.Cryostem.R %in% ft_integ_louis$Id.Cryostem.R)
+
+head(recip_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+I add the metadata information to my table for later:
+```{r}
+ft_louis <- left_join(ft_integ_louis,
+                      recip_info_louis, 
+                      by = "Id.Cryostem.R")
+```
+
+We can see how the different features are correlated in the 23 recipients of 
+the St Louis cohort
+```{r}
+gr <- as.character(ft_louis$GROUP)
+gr[which(gr != "non_tolerant")] <- "tolerant"
+
+gr_medians <- ft_integ_louis %>%
+  column_to_rownames("Id.Cryostem.R") %>% 
+  mutate(group = as.factor(gr)) %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+
+tmp <- ft_integ_louis %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  apply(2, scale)
+correlations <- tmp %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=colnames(tmp))
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#FF000080", length(nodes$name))
+medians <- gr_medians[,make.names(nodes$name)]
+for (gene in seq_along(colnames(medians))){
+  if (medians["tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#0000FF80"
+  }
+}
+
+
+color_frame <- rep("palegreen3", length(nodes$name))
+color_frame[grep("met_",nodes$name)] <- "mediumorchid4"
+color_frame[grep("rna_",nodes$name)] <- "sandybrown"
+
+set.seed(42)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, vertex.frame.color= color_frame)
+```
+
+## Cryostem cohort
+
+For the patients from the Cryostem cohort, I extract the CyTOF, metabo and 
+transcriptomics features that had the same behaviour in both cohorts:
+
+```{r}
+ft_integ_cryo <- readRDS("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/integ_national/cyt_met_rna_beh_features.RDS")
+```
+
+I extract the metadata (age, gender, ...) for the Cryostem cohort
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(METABONAME)) %>%  
+  dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_cryo <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+recip_info_cryo <- couple_info_cryo %>% 
+  dplyr::filter(grepl("R", CyTOF.Name)) %>% 
+  dplyr::filter(CyTOF.Name %in% ft_integ_cryo$Id.Cryostem.R)
+
+head(recip_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+I add the metadata information to my table for later:
+```{r}
+recip_info_cryo <- recip_info_cryo %>% 
+  mutate(Id.Cryostem.R = CyTOF.Name)
+
+ft_cryo <- left_join(ft_integ_cryo,
+                      recip_info_cryo, 
+                      by = "Id.Cryostem.R")
+```
+
+We can filter and plot only the links between variables that were significant 
+in both cohorts:
+```{r, echo = FALSE}
+pval_threshold <- 0.01
+compar <- "TNT"
+
+# St Louis
+gr_l <- as.character(ft_louis$GROUP)
+gr_l[which(gr_l != "non_tolerant")] <- "tolerant"
+
+gr_medians_l <- ft_integ_louis %>%
+  column_to_rownames("Id.Cryostem.R") %>% 
+  mutate(group = as.factor(gr_l)) %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians_l) <- gr_medians_l$group
+
+tmp_l <- ft_integ_louis %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  apply(2, scale)
+
+# correlation St Louis
+ft_df <- tmp_l %>% 
+  as.data.frame() %>% 
+  mutate(group = gr_l) %>% 
+  magrittr::set_rownames(ft_integ_louis$Id.Cryostem.R)
+
+correlations <- ft_df %>%
+  dplyr::select(-group) %>%
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>%
+  dplyr::filter(var1 < var2)
+  
+# cor.tests to define which correlations are significant
+cor_sel <- correlations[which(correlations[,3] > 0),]
+pvals <- rep(1, nrow(cor_sel))
+for(i in 1: nrow(cor_sel)){
+  var1 <- ft_df[,cor_sel[i,1]]
+  var2 <- ft_df[,cor_sel[i,2]]
+  pvals[i] <- cor.test(var1, var2, method = "spearman", exact = FALSE)$p.value
+}
+  
+cor_sel <- cor_sel[which(pvals < pval_threshold),]
+
+  
+  
+# Cryostem
+gr_c <- tolower(as.character(ft_cryo$GROUP))
+gr_c[which(gr_c != "non_tolerant")] <- "tolerant"
+
+gr_medians_c <- ft_integ_cryo %>%
+  column_to_rownames("Id.Cryostem.R") %>% 
+  mutate(group = as.factor(gr_c)) %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians_c) <- gr_medians_c$group
+
+tmp_c <- ft_integ_cryo %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  apply(2, scale)
+
+# Correlations Cryostem
+other <- tmp_c %>% 
+  as.data.frame() %>% 
+  mutate(group = gr_c) %>% 
+  magrittr::set_rownames(ft_integ_cryo$Id.Cryostem.R)
+
+correlations_other <- other %>%
+  dplyr::select(-group) %>%
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>%
+  dplyr::filter(var1 < var2)
+  
+# cor.tests to define which correlations are significant
+cor_sel_other <- correlations_other[which(correlations_other[,3] > 0),]
+pvals_other <- rep(1, nrow(cor_sel_other))
+for(i in 1: nrow(cor_sel_other)){
+  var1 <- other[,cor_sel_other[i,1]]
+  var2 <- other[,cor_sel_other[i,2]]
+  pvals_other[i] <- cor.test(var1, var2, method = "spearman", exact = FALSE)$p.value
+}
+  
+cor_sel_other <- cor_sel_other[which(pvals_other < pval_threshold),]
+
+
+
+  
+# Both cohorts
+correlated_both <- dplyr::intersect(cor_sel[,1:2], cor_sel_other[,1:2])
+cor <- rep(0, nrow(correlated_both))
+for(i in 1:nrow(correlated_both)){
+  cor1 <- cor_sel[which((cor_sel[,1] == correlated_both[i,1]) &
+                          (cor_sel[,2] == correlated_both[i,2])), 3]
+  cor2 <- cor_sel_other[which((cor_sel_other[,1] == correlated_both[i,1]) &
+                                (cor_sel_other[,2] == correlated_both[i,2])), 3]
+  cor[i] <- mean(cor1, cor2)
+}
+correlated_both$value <- cor
+
+gr <- graph_from_data_frame(correlated_both, directed = FALSE,
+                            vertices=colnames(ft_df)[-which(colnames(ft_df)=="group")])
+nodes <- get.vertex.attribute(gr)
+  
+if(compar == "TNT"){
+  color_nodes <- rep("#FF000080", length(nodes$name))
+  
+  gr_medians <- ft_df %>%
+    group_by(group) %>%
+    summarize_if(is.numeric, median) %>%
+    as.data.frame()
+  rownames(gr_medians) <- gr_medians$group
+  
+  medians <- gr_medians[,nodes$name]
+  for (gene in seq_along(colnames(medians))){
+    if (medians["tolerant", gene] == max(medians[, gene])){
+      color_nodes[gene] <- "#0000FF80"
+    }
+  }
+} else if(compar == "PS"){
+  color_nodes <- rep("#0000FF80", length(nodes$name))
+  
+  gr_medians <- ft_df %>%
+    group_by(group) %>%
+    summarize_if(is.numeric, median) %>%
+    as.data.frame()
+  rownames(gr_medians) <- gr_medians$group
+  
+  medians <- gr_medians[,nodes$name]
+  for (gene in seq_along(colnames(medians))){
+    if (medians["primary_tolerant", gene] == max(medians[, gene])){
+      color_nodes[gene] <- "#00FF0080"
+    }
+  }
+}
+
+color_frame <- rep("palegreen3", length(nodes$name))
+color_frame[grep("met_",nodes$name)] <- "mediumorchid4"
+color_frame[grep("rna_",nodes$name)] <- "sandybrown"
+
+set.seed(42)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_frame, vertex.frame.color= color_nodes)
+legend(1, 1, legend=c(round(min(E(gr)$value), digits = 3), round(max(E(gr)$value), digits = 3)),
+         col=c("grey", "grey"),
+         lwd=c((min(E(gr)$value) - round(min(E(gr)$value), digits = 2)) * 10,
+               (max(E(gr)$value) - round(min(E(gr)$value), digits = 2)) * 10),
+         cex=0.8,
+         title="Edge weight", text.font=4, bg='white')
+
+```
+
+```{r}
+gr_components <- decompose(gr, mode = "strong", max.comps = NA,
+                 min.vertices = 0)
+comp_sizes <- sapply(gr_components, diameter)
+
+list_components <- lapply(which(comp_sizes != 0), function(i){
+  vertex_names <- vertex_attr(gr_components[[i]], index = V(gr_components[[i]]))[[1]]
+  vertex_names
+})
+
+write.xlsx(list_components, file = "../data/integ_2_cohorts/graph_components.xlsx")
+```
+
+
+## Both cohorts
+
+I can now merge St Louis and Cryostem patients into one big table, and 
+perform PCA:
+```{r, echo = FALSE}
+ft_cryo <- ft_cryo %>% 
+  mutate(GROUP = tolower(GROUP),
+         GENDER = Gender)
+
+ft_integ_2_cohorts <- rbind(ft_integ_louis,
+                      ft_integ_cryo) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+ft_2_cohorts <- rbind(ft_louis %>% 
+                        dplyr::select(colnames(ft_integ_2_cohorts),
+                               Id.Cryostem.R, GROUP, GENDER, age_recip, CMVStatus, cmv_comp),
+                      ft_cryo %>% 
+                        dplyr::select(colnames(ft_integ_2_cohorts),
+                               Id.Cryostem.R, GROUP, GENDER, age_recip, CMVStatus, cmv_comp))
+
+ft_integ_2_cohorts <- ft_integ_2_cohorts[ft_2_cohorts$Id.Cryostem.R,]
+```
+
+```{r}
+pca <- prcomp(ft_integ_2_cohorts, center = TRUE, scale. = TRUE)
+plot(pca)
+```
+
+And plot the patients coloured per group:
+```{r, echo = FALSE}
+gr <- as.character(ft_2_cohorts$GROUP)
+gr[which(gr != "non_tolerant")] <- "tolerant"
+
+ft_2 <- ft_2_cohorts %>% mutate(PC1 = pca$x[,1],
+                                PC2 = pca$x[,2],
+                                GROUP = as.factor(gr))
+
+
+
+ggplot(ft_2, aes(x = PC1, y = PC2, col = GROUP), label = Id.Cryostem.R) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+  
+```
+
+A large number of the non-tolerant patients are on the right of this PCA.
+Among these non-tolerant patients, we retrieve the patients that we had 
+already identified as special in the CyTOF data of the St-Louis cohort:
+R836, R219, R830, R598, R690
+```{r}
+ggplot(ft_2, aes(x = PC1, y = PC2, col = CMVStatus), label = Id.Cryostem.R) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) +
+  scale_color_manual(breaks = c("0", "1", "NA"),
+                     values = c("grey", "black", "violet"))
+
+```
+
+Many of these patients have CMV. We can see which CyTOF, metabo 
+and transcriptomics features are pushing the patients to the right on the PCA:
+```{r, echo = FALSE}
+pc1_high_ft <- sort(pca$rotation[,1], decreasing = TRUE)[1:20]
+
+ann_row <- ft_2 %>% dplyr::select(Id.Cryostem.R, GROUP, CMVStatus) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+annotation_colors = list(
+  CMVStatus = c("0"="grey", "1"="black"),
+  GROUP = c("tolerant"="blue", "non_tolerant"="red"))
+
+# order patients as they are ordered along PC1
+ordered_pat <- names(sort(pca$x[,1]))
+ft_heatmap <- t(ft_integ_2_cohorts[ordered_pat,])
+
+pheatmap::pheatmap(ft_heatmap[names(pc1_high_ft),], 
+                   cluster_cols = FALSE,
+                   annotation_col = ann_row,
+                   annotation_colors = annotation_colors, scale = "column")
+
+pc1_high_ft <- as.data.frame(sort(pca$rotation[,1], decreasing = TRUE)[1:100])
+
+write.xlsx(pc1_high_ft, "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/integ_2_cohorts/100_ft_hhigh_pc1.xlsx", row.names = TRUE)
+```
+
+### Different approach : clustering
+
+We can use a different approach by clustering the patients into 2 clusters
+based on ther CyTOF, metabo and transcriptomics features.
+```{r, echo = FALSE}
+ft_2_km <- apply(ft_integ_2_cohorts, 2, scale)
+rownames(ft_2_km) <- rownames(ft_integ_2_cohorts)
+set.seed(1)
+km <- kmeans(ft_2_km, centers = 2)
+```
+
+How were the patients split?
+In cluster 1, we have more non-tolerant patients, of which a high majority has CMV.
+In cluster 2, there are mainly tolerant patients, and the CMV is 50/50
+```{r}
+cl1 <- rownames(ft_2_km)[which(km$cluster == 1)]
+cl2 <- rownames(ft_2_km)[which(km$cluster == 2)]
+
+ft_km <- ft_2 %>% 
+  mutate(clustering = km$cluster)
+table(ft_km[,c("GROUP", "CMVStatus", "clustering")])
+```
+
+
+Which variables differ the most between the two clusters?
+```{r, echo = FALSE}
+pvals <- lapply(1:ncol(ft_2_km), function(ft){
+  tmp <- ft_2_km[,ft]
+  tt <- wilcox.test(tmp[which(km$cluster == 1)], tmp[which(km$cluster == 2)], 
+                    exact = FALSE, alternative = c("greater"))
+  tt$p.value
+})
+ft_imp <- unlist(pvals)
+names(ft_imp) <- colnames(ft_2_km)
+
+ft_sel <- sort(ft_imp)[1:20]
+```
+
+```{r, echo = FALSE}
+ann_row <- ft_2 %>%dplyr::select(Id.Cryostem.R, GROUP, CMVStatus) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+ann_row <- ann_row[rownames(ft_2_km),] %>% 
+  rownames_to_column("rn") %>% 
+  mutate(clustering = km$cluster) %>% 
+  column_to_rownames("rn")
+
+annotation_colors = list(
+  CMVStatus = c("0"="grey", "1"="black"),
+  GROUP = c("tolerant"="blue", "non_tolerant"="red"),
+  clustering = c("1" = "yellow", "2" = "green"))
+
+# order patients as they are ordered along PC1
+ordered_pat <- c(cl2, cl1)
+ft_heatmap <- t(ft_integ_2_cohorts[ordered_pat,])
+
+pheatmap::pheatmap(ft_heatmap[names(ft_sel),], 
+                   cluster_cols = FALSE,
+                   annotation_col = ann_row,
+                   annotation_colors = annotation_colors, scale = "column")
+
+cl1_high_ft <- as.data.frame(sort(ft_imp)[1:100]) %>% 
+  rownames_to_column("rn") %>% 
+  mutate(direction = rep("unknown", 100)) %>% 
+  column_to_rownames("rn")
+for(ft in 1:100){
+  tmp <- as.data.frame(ft_2_km[,rownames(cl1_high_ft)[ft]]) %>% 
+    mutate(clustering = km$cluster) %>% 
+    group_by(clustering) %>% 
+    summarise_all(median)
+  if(as.numeric(tmp[1,2]) < as.numeric(tmp[2,2])){
+    cl1_high_ft$direction[ft] <- "underexpressed in cluster 1"
+  } else {cl1_high_ft$direction[ft] <- "overexpressed in cluster 1"}
+}
+
+write.xlsx(cl1_high_ft, "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/integ_2_cohorts/100_ft_high_cluster1.xlsx", row.names = TRUE)
+```
+
+
+## CyTOF alone:
+
+We can do the same analyis but focusing only on the CyTOF features. I extract 
+the 24 features for the St Louis cohort
+```{r, echo = FALSE}
+tmp <- readRDS("../data/cyto/log2/recip/pctgs_sel_ft_recip_TNT_90.RDS")
+sel_beh <- read.xlsx("../data/cyto_national/log2/recip/perm_val_beh_TNT_90_thresh.xlsx")
+
+ft_recip_cyto_louis <- tmp %>% 
+ dplyr::select(sel_beh$features) 
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  rownames_to_column("rn") %>% 
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("rn")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_louis <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+recip_info_louis <- couple_info_louis %>%
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(Id.Cryostem.R %in% rownames(ft_recip_cyto_louis))
+
+ft_recip_cyto_louis <- ft_recip_cyto_louis[recip_info_louis$Id.Cryostem.R,]
+
+head(recip_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+And for the Cryostem cohort:
+```{r, echo = FALSE}
+tmp <- readRDS("../data/cyto_national/log2/recip/pctgs_sel_ft_recip_TNT_90.RDS")
+sel_beh <- read.xlsx("../data/cyto_national/log2/recip/perm_val_beh_TNT_90_thresh.xlsx")
+
+ft_recip_cyto_cryo <- tmp %>% 
+ dplyr::select(sel_beh$features)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_cryo <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+couple_info_cryo$CyTOF.Name[grep("R4316", couple_info_cryo$CyTOF.Name)] <- "R4316"
+
+recip_info_cryo <- couple_info_cryo %>% 
+  dplyr::filter(CyTOF.Name %in% rownames(ft_recip_cyto_cryo))
+
+ft_recip_cyto_cryo <- ft_recip_cyto_cryo[recip_info_cryo$CyTOF.Name,]
+
+head(recip_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+I can then merge the two cohorts into one dataset:
+```{r}
+if(all(colnames(ft_recip_cyto_louis) == colnames(ft_recip_cyto_cryo))){
+  ft_cyto <- rbind(ft_recip_cyto_louis,
+                   ft_recip_cyto_cryo)
+}
+```
+
+And apply PCA to the data:
+```{r}
+pca <- prcomp(ft_cyto, center = TRUE, scale. = TRUE)
+plot(pca)
+```
+
+We can plot the patients coloured per group:
+```{r, echo = FALSE}
+# gather metadata for both cohorts
+recip_info_cryo <- recip_info_cryo %>% 
+  mutate(Id.Cryostem.R = CyTOF.Name,
+         GROUP = tolower(GROUP))
+
+recip_info_cyto <- rbind(recip_info_louis %>% 
+                          dplyr::select(Id.Cryostem.R, GROUP, CMVStatus, age_recip, cmv_comp),
+                         recip_info_cryo %>% 
+                          dplyr::select(Id.Cryostem.R, GROUP, CMVStatus, age_recip, cmv_comp))
+
+ft_2_cohorts <- cbind(ft_cyto, recip_info_cyto) %>% 
+  mutate(PC1 = pca$x[,1],
+         PC2 = pca$x[,2],
+         PC3 = pca$x[,3])
+
+
+gr <- as.character(ft_2_cohorts$GROUP)
+gr[which(gr != "non_tolerant")] <- "tolerant"
+
+ft_2_cohorts <- ft_2_cohorts %>% mutate(GROUP = as.factor(gr))
+
+ggplot(ft_2_cohorts, aes(x = PC1, y = PC2, col = GROUP), label = Id.Cryostem.R) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+  
+```
+
+A large number of the non-tolerant patients are on the top of this PCA.
+Among these non-tolerant patients, we retrieve the patients that we had 
+already identified as special in the CyTOF data of the St-Louis cohort:
+R836, R219, R830, R598, R690
+```{r}
+ggplot(ft_2_cohorts, aes(x = PC1, y = PC2, col = CMVStatus), label = Id.Cryostem.R) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) +
+  scale_color_manual(breaks = c("0", "1", "NA"),
+                     values = c("grey", "black", "violet"))
+
+```
+
+Many of these patients have CMV. We can see which CyTOF features are pushing 
+the patients to the top of the PCA:
+```{r, echo = FALSE}
+pc2_high_ft <- sort(pca$rotation[,2], decreasing = TRUE)
+pc2_high_ft <- pc2_high_ft[which(pc2_high_ft > 0)]
+
+ann_row <- ft_2_cohorts %>%dplyr::select(Id.Cryostem.R, GROUP, CMVStatus) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+annotation_colors = list(
+  CMVStatus = c("0"="grey", "1"="black"),
+  GROUP = c("tolerant"="blue", "non_tolerant"="red"))
+
+# order patients as they are ordered along PC1
+ordered_pat <- names(sort(pca$x[,2]))
+ft_heatmap <- t(ft_cyto[ordered_pat,])
+
+data_tmp <- t(ft_heatmap)
+
+write.xlsx(data_tmp, "../data/integ_2_cohorts/ft_cytof_high_pc2.xlsx", row.names = TRUE)
+write.xlsx(ft_cyto, "../data/integ_2_cohorts/ft_cytof_24_ft.xlsx", row.names = TRUE)
+
+pheatmap::pheatmap(ft_heatmap[names(pc2_high_ft),], 
+                   cluster_cols = FALSE,
+                   annotation_col = ann_row,
+                   annotation_colors = annotation_colors, scale = "column")
+
+pc2_high_ft <- as.data.frame(sort(pca$rotation[,2], decreasing = TRUE)[1:24])
+
+write.xlsx(pc2_high_ft, "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/integ_2_cohorts/24_cytof_ft_high_pc2.xlsx", row.names = TRUE)
+```
+
+## Second PCA
+
+Or we can generate the PCA on the St Louis patients alone, and then map the 
+Cryostem patients on it.
+```{r}
+louis_tmp <- apply(ft_recip_cyto_louis, 2, scale)
+pca <- prcomp(louis_tmp, center = FALSE, scale. = FALSE)
+plot(pca)
+```
+
+```{r}
+plot_louis <- ft_2_cohorts %>% 
+  dplyr::filter(Id.Cryostem.R %in% rownames(ft_recip_cyto_louis))
+rownames(plot_louis) <- plot_louis$Id.Cryostem.R
+plot_louis <- plot_louis[rownames(ft_recip_cyto_louis),]
+
+plot_louis <- plot_louis %>% 
+  mutate(PC1 = pca$x[,1],
+         PC2 = pca$x[,2])
+
+ggplot(plot_louis, aes(x = PC1, y = PC2, col = GROUP)) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+We can then map the Cryostem cohorts in the space defined by the St Louis PCs
+```{r}
+cryo_tmp <- apply(ft_recip_cyto_cryo, 2, scale)
+new_coords <- scale(cryo_tmp, pca$center, pca$scale) %*% pca$rotation 
+
+plot_cryo <- ft_2_cohorts %>% 
+  dplyr::filter(Id.Cryostem.R %in% rownames(ft_recip_cyto_cryo))
+rownames(plot_cryo) <- plot_cryo$Id.Cryostem.R
+plot_cryo <- plot_cryo[rownames(ft_recip_cyto_cryo),]
+
+plot_cryo <- plot_cryo %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2])
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo))))
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= GROUP, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  ggtitle("Separation of tolerant vs non tolerant recipients")
+```
+
+
+### Different approach : clustering
+
+We can use a different approach by clustering the patients into 2 clusters
+based on ther CyTOF features.
+```{r, echo = FALSE}
+ft_2_km <- apply(ft_cyto, 2, scale)
+rownames(ft_2_km) <- rownames(ft_cyto)
+set.seed(1)
+km <- kmeans(ft_2_km, centers = 2)
+```
+
+How were the patients split?
+The two clusters don't seem very interesting to us, cluster 1 is only slightly
+enriched in CMV+ and non tolerant patients.
+```{r}
+cl1 <- rownames(ft_2_km)[which(km$cluster == 1)]
+cl2 <- rownames(ft_2_km)[which(km$cluster == 2)]
+
+ft_km <- ft_2_cohorts %>% 
+  mutate(clustering = km$cluster)
+table(ft_km[,c("GROUP", "CMVStatus", "clustering")])
+```
+
+
+Which variables differ the most between the two clusters?
+```{r, echo = FALSE}
+pvals <- lapply(1:ncol(ft_2_km), function(ft){
+  tmp <- ft_2_km[,ft]
+  tt <- wilcox.test(tmp[which(km$cluster == 1)], tmp[which(km$cluster == 2)],
+                    exact = FALSE, alternative = c("greater"))
+  tt$p.value
+})
+ft_imp <- unlist(pvals)
+names(ft_imp) <- colnames(ft_2_km)
+
+ft_sel <- sort(ft_imp)[1:20]
+```
+
+```{r, echo = FALSE}
+ann_row <- ft_2_cohorts %>%dplyr::select(Id.Cryostem.R, GROUP, CMVStatus) %>%
+  column_to_rownames("Id.Cryostem.R")
+
+ann_row <- ann_row[rownames(ft_2_km),] %>%
+  rownames_to_column("rn") %>%
+  mutate(clustering = km$cluster) %>%
+  column_to_rownames("rn")
+
+annotation_colors = list(
+  CMVStatus = c("0"="grey", "1"="black"),
+  GROUP = c("tolerant"="blue", "non_tolerant"="red"),
+  clustering = c("1" = "yellow", "2" = "green"))
+
+# order patients as they are ordered along PC1
+ordered_pat <- c(cl2, cl1)
+ft_heatmap <- t(ft_cyto[ordered_pat,])
+
+pheatmap::pheatmap(ft_heatmap[names(ft_sel),],
+                   cluster_cols = FALSE,
+                   annotation_col = ann_row,
+                   annotation_colors = annotation_colors, scale = "column")
+
+# cl1_high_ft <- as.data.frame(sort(ft_imp)[1:100]) %>%
+#   rownames_to_column("rn") %>%
+#   mutate(direction = rep("unknown", 100)) %>%
+#   column_to_rownames("rn")
+# for(ft in 1:100){
+#   tmp <- as.data.frame(ft_2_km[,rownames(cl1_high_ft)[ft]]) %>%
+#     mutate(clustering = km$cluster) %>%
+#     group_by(clustering) %>%
+#     summarise_all(median)
+#   if(as.numeric(tmp[1,2]) < as.numeric(tmp[2,2])){
+#     cl1_high_ft$direction[ft] <- "underexpressed in cluster 1"
+#   } else {cl1_high_ft$direction[ft] <- "overexpressed in cluster 1"}
+# }
+# 
+# write.xlsx(cl1_high_ft, "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/integ_2_cohorts/100_ft_high_cluster1.xlsx", row.names = TRUE)
+```
+
+
+
+## Metabolites alone:
+
+We can do the same analyis but focusing only on the metabolites. I extract 
+the 44 metabolites for the St Louis cohort
+```{r, echo = FALSE}
+load("../data/metabo/recip/metabo_ft_sel_recip_TNT_90.RData")
+sel_beh <- read.xlsx("../data/metabo/v2_012020/recip/annot_TNT_selected_ft_beh_90_stlouis.xlsx")
+
+recip_metabo_louis <- metabo_ft_sel_recip_TNT_90[,sel_beh[,1]]
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(!is.na(METABONAME)) %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  rownames_to_column("rn") %>% 
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("rn")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_louis <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2))
+
+recip_info_louis <- couple_info_louis %>%
+  dplyr::filter(METABONAME %in% rownames(recip_metabo_louis))
+
+recip_metabo_louis <- recip_metabo_louis[recip_info_louis$METABONAME,]
+
+head(recip_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+And for the Cryostem cohort:
+```{r, echo = FALSE}
+tmp <- readRDS("../data/metabo_national/v2_012020/recip/pctgs_sel_ft_recip_TNT_90.RDS")
+sel_beh <- read.xlsx("../data/metabo/v2_012020/recip/annot_TNT_selected_ft_beh_90_stlouis.xlsx")
+
+recip_metabo_cryo <- tmp[,sel_beh[,1]]
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(!is.na(METABONAME)) %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_cryo <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2),
+         METABONAME = gsub(" ", "_", METABONAME)) 
+
+recip_info_cryo <- couple_info_cryo %>% 
+  dplyr::filter(METABONAME %in% rownames(recip_metabo_cryo))
+
+recip_metabo_cryo <- recip_metabo_cryo[recip_info_cryo$METABONAME,]
+
+head(recip_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+## PCA
+
+We can generate a PCA on the St Louis patients alone, and then map the 
+Cryostem patients on it.
+```{r}
+louis_tmp <- apply(recip_metabo_louis, 2, scale)
+pca <- prcomp(louis_tmp, center = FALSE, scale. = FALSE)
+plot(pca)
+```
+
+```{r}
+plot_louis <- recip_info_louis %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = pca$x[,1],
+         PC2 = pca$x[,2])
+
+ggplot(plot_louis, aes(x = PC1, y = PC2, col = GROUP)) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+We can then map the Cryostem cohort in the space defined by the St Louis PCs
+```{r}
+cryo_tmp <- apply(recip_metabo_cryo, 2, scale)
+new_coords <- scale(cryo_tmp, pca$center, pca$scale) %*% pca$rotation 
+
+plot_cryo <- recip_info_cryo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2],
+         GROUP = tolower(GROUP))
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo)))) 
+all_2plot$GROUP <- as.character(all_2plot$GROUP)
+all_2plot$GROUP[which(all_2plot$GROUP != "non_tolerant")] <- "tolerant"
+all_2plot$GROUP <- as.factor(as.character(all_2plot$GROUP))
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= GROUP, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  ggtitle("Separation of tolerant vs non tolerant recipients")
+```
+
+
+
+## RNAseq alone:
+
+We can do the same analyis but focusing only on the genes. I extract 
+the 278 genes for the St Louis cohort
+```{r, echo = FALSE}
+load("../data/RNAseq/recip_only/rna_recip_louis_TNT_90.RData")
+sel_beh <- read.xlsx("../data/RNAseq/recip_only/perm_val_beh_TNT_90_thresh.xlsx")
+
+recip_rna_louis <- rna_recip_louis_TNT_90 %>% 
+ dplyr::select(sel_beh$sel_beh)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(!is.na(FCSNAME)) %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  rownames_to_column("rn") %>% 
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("rn")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_louis <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2))
+
+recip_info_louis <- couple_info_louis %>%
+  dplyr::filter(Id.Cryostem.R %in% rownames(recip_rna_louis))
+
+recip_rna_louis <- recip_rna_louis[recip_info_louis$Id.Cryostem.R,]
+
+head(recip_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+And for the Cryostem cohort:
+```{r, echo = FALSE}
+load("../data/RNA_seq_national/recip_only/rna_recip_cryo_TNT_90.RData")
+sel_beh <- read.xlsx("../data/RNAseq/recip_only/perm_val_beh_TNT_90_thresh.xlsx")
+
+recip_rna_cryo <- rna_recip_cryo_TNT_90 %>% 
+ dplyr::select(sel_beh$sel_beh)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(!is.na(FCSNAME)) %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_cryo <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) 
+
+recip_info_cryo <- couple_info_cryo %>% 
+  dplyr::filter(Id.Cryostem.R %in% rownames(recip_rna_cryo))
+
+recip_rna_cryo <- recip_rna_cryo[recip_info_cryo$Id.Cryostem.R,]
+
+head(recip_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+## PCA
+
+We can generate a PCA on the St Louis patients alone, and then map the 
+Cryostem patients on it.
+```{r}
+louis_tmp <- apply(recip_rna_louis, 2, scale)
+pca <- prcomp(louis_tmp, center = FALSE, scale. = FALSE)
+plot(pca)
+```
+
+```{r}
+plot_louis <- recip_info_louis %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = pca$x[,1],
+         PC2 = pca$x[,2])
+
+ggplot(plot_louis, aes(x = PC1, y = PC2, col = GROUP)) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0)
+```
+
+We can then map the Cryostem cohort in the space defined by the St Louis PCs
+```{r}
+cryo_tmp <- apply(recip_rna_cryo, 2, scale)
+new_coords <- scale(cryo_tmp, pca$center, pca$scale) %*% pca$rotation 
+
+plot_cryo <- recip_info_cryo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2],
+         GROUP = tolower(GROUP))
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo)))) 
+all_2plot$GROUP <- as.character(all_2plot$GROUP)
+all_2plot$GROUP[which(all_2plot$GROUP != "non_tolerant")] <- "tolerant"
+all_2plot$GROUP <- as.factor(as.character(all_2plot$GROUP))
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= GROUP, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  ggtitle("Separation of tolerant vs non tolerant recipients")
+```
+
+
+
+
+
+# Features extracted from the comparison of primary versus secondary tolerant patients
+
+## St Louis cohort
+
+For the patients from the St Louis cohort, I extract the CyTOF, metabo and 
+transcriptomics features that had the same behaviour in both cohorts:
+
+```{r}
+ft_integ_louis <- readRDS("~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/integ/cyt_met_rna_beh_PTST_features.RDS")
+```
+
+I extract the metadata (age, gender, ...) for the St Louis cohort
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(METABONAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  column_to_rownames("METABONAME") %>% 
+  rownames_to_column("rn") %>% 
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("rn")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_louis <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+recip_info_louis <- couple_info_louis %>% 
+  dplyr::filter(Id.Cryostem.R %in% ft_integ_louis$Id.Cryostem.R)
+
+head(recip_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+I add the metadata information to my table for later:
+```{r}
+ft_louis <- left_join(ft_integ_louis,
+                      recip_info_louis, 
+                      by = "Id.Cryostem.R")
+```
+
+We can see how the different features are correlated in the 10 recipients of 
+the St Louis cohort
+```{r}
+gr_medians <- ft_integ_louis %>%
+  column_to_rownames("Id.Cryostem.R") %>% 
+  mutate(group = as.factor(as.character(recip_info_louis$GROUP))) %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians) <- gr_medians$group
+
+tmp <- ft_integ_louis %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  apply(2, scale)
+correlations <- tmp %>% 
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>% 
+  dplyr::filter(var1 < var2)
+
+correlated_features <- correlations %>% 
+  dplyr::filter(value > 0.7)
+gr <- graph_from_data_frame(correlated_features, directed = FALSE, vertices=colnames(tmp))
+nodes <- get.vertex.attribute(gr)
+color_nodes <- rep("#00FF0080", length(nodes$name))
+medians <- gr_medians[,make.names(nodes$name)]
+for (gene in seq_along(colnames(medians))){
+  if (medians["secondary_tolerant", gene] == max(medians[, gene])){
+    color_nodes[gene] <- "#0000FF80"
+  }
+}
+
+
+color_frame <- rep("palegreen3", length(nodes$name))
+color_frame[grep("met_",nodes$name)] <- "mediumorchid4"
+color_frame[grep("rna_",nodes$name)] <- "sandybrown"
+
+set.seed(42)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_nodes, vertex.frame.color= color_frame)
+
+set.seed(42)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_frame, vertex.frame.color= color_nodes)
+```
+
+And plot the ST Louis patients in a PCA
+```{r}
+ft_2 <- ft_integ_louis %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  apply(2, scale)
+pca <- prcomp(ft_2, center = FALSE, scale. = FALSE)
+plot(pca)
+```
+
+```{r, echo = FALSE}
+ft_2b <- ft_louis %>% mutate(PC1 = pca$x[,1],
+                                PC2 = pca$x[,2])
+
+
+
+ggplot(ft_2b, aes(x = PC1, y = PC2, col = GROUP), label = Id.Cryostem.R) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) +
+  scale_color_manual(values = c("green", "blue"))
+  
+```
+
+
+## Cryostem cohort
+
+For the patients from the Cryostem cohort, I extract the CyTOF, metabo and 
+transcriptomics features that had the same behaviour in both cohorts:
+
+```{r}
+ft_integ_cryo <- readRDS("../data/integ_national/cyt_met_rna_beh_PTST_features.RDS")
+```
+
+I extract the metadata (age, gender, ...) for the Cryostem cohort
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(METABONAME)) %>%  
+  dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_cryo <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+recip_info_cryo <- couple_info_cryo %>% 
+  dplyr::filter(grepl("R", CyTOF.Name)) %>% 
+  dplyr::filter(CyTOF.Name %in% ft_integ_cryo$Id.Cryostem.R) %>% 
+  mutate(GROUP = tolower(GROUP))
+
+head(recip_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+I add the metadata information to my table for later:
+```{r}
+recip_info_cryo <- recip_info_cryo %>% 
+  mutate(Id.Cryostem.R = CyTOF.Name)
+
+ft_cryo <- left_join(ft_integ_cryo,
+                      recip_info_cryo, 
+                      by = "Id.Cryostem.R")
+```
+
+We can see how the different features are correlated in the 28 recipients of 
+the Cryostem cohort
+
+We can filter and plot only the links between variables that were significant 
+in both cohorts:
+```{r, echo = FALSE}
+pval_threshold <- 0.01
+compar <- "PS"
+
+# St Louis
+gr_l <- as.character(ft_louis$GROUP)
+
+gr_medians_l <- ft_integ_louis %>%
+  column_to_rownames("Id.Cryostem.R") %>% 
+  mutate(group = as.factor(gr_l)) %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians_l) <- gr_medians_l$group
+
+tmp_l <- ft_integ_louis %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  apply(2, scale)
+
+# correlation St Louis
+ft_df <- tmp_l %>% 
+  as.data.frame() %>% 
+  mutate(group = gr_l) %>% 
+  magrittr::set_rownames(ft_integ_louis$Id.Cryostem.R)
+
+correlations <- ft_df %>%
+  dplyr::select(-group) %>%
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>%
+  dplyr::filter(var1 < var2)
+  
+# cor.tests to define which correlations are significant
+cor_sel <- correlations[which(correlations[,3] > 0),]
+pvals <- rep(1, nrow(cor_sel))
+for(i in 1: nrow(cor_sel)){
+  var1 <- ft_df[,cor_sel[i,1]]
+  var2 <- ft_df[,cor_sel[i,2]]
+  pvals[i] <- cor.test(var1, var2, method = "spearman", exact = FALSE)$p.value
+}
+  
+cor_sel <- cor_sel[which(pvals < pval_threshold),]
+
+  
+  
+# Cryostem
+gr_c <- tolower(as.character(ft_cryo$GROUP))
+
+gr_medians_c <- ft_integ_cryo %>%
+  column_to_rownames("Id.Cryostem.R") %>% 
+  mutate(group = as.factor(gr_c)) %>% 
+  group_by(group) %>% 
+  summarize_if(is.numeric, median) %>% 
+  as.data.frame()
+rownames(gr_medians_c) <- gr_medians_c$group
+
+tmp_c <- ft_integ_cryo %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  apply(2, scale)
+
+# Correlations Cryostem
+other <- tmp_c %>% 
+  as.data.frame() %>% 
+  mutate(group = gr_c) %>% 
+  magrittr::set_rownames(ft_integ_cryo$Id.Cryostem.R)
+
+correlations_other <- other %>%
+  dplyr::select(-group) %>%
+  as.matrix %>%
+  cor %>%
+  as.data.frame %>%
+  rownames_to_column(var = 'var1') %>%
+  gather(var2, value, -var1) %>%
+  dplyr::filter(var1 < var2)
+  
+# cor.tests to define which correlations are significant
+cor_sel_other <- correlations_other[which(correlations_other[,3] > 0),]
+pvals_other <- rep(1, nrow(cor_sel_other))
+for(i in 1: nrow(cor_sel_other)){
+  var1 <- other[,cor_sel_other[i,1]]
+  var2 <- other[,cor_sel_other[i,2]]
+  pvals_other[i] <- cor.test(var1, var2, method = "spearman", exact = FALSE)$p.value
+}
+  
+cor_sel_other <- cor_sel_other[which(pvals_other < pval_threshold),]
+
+
+
+  
+# Both cohorts
+correlated_both <- dplyr::intersect(cor_sel[,1:2], cor_sel_other[,1:2])
+cor <- rep(0, nrow(correlated_both))
+for(i in 1:nrow(correlated_both)){
+  cor1 <- cor_sel[which((cor_sel[,1] == correlated_both[i,1]) &
+                          (cor_sel[,2] == correlated_both[i,2])), 3]
+  cor2 <- cor_sel_other[which((cor_sel_other[,1] == correlated_both[i,1]) &
+                                (cor_sel_other[,2] == correlated_both[i,2])), 3]
+  cor[i] <- mean(cor1, cor2)
+}
+correlated_both$value <- cor
+
+gr <- graph_from_data_frame(correlated_both, directed = FALSE,
+                            vertices=colnames(ft_df)[-which(colnames(ft_df)=="group")])
+nodes <- get.vertex.attribute(gr)
+  
+if(compar == "TNT"){
+  color_nodes <- rep("#FF000080", length(nodes$name))
+  
+  gr_medians <- ft_df %>%
+    group_by(group) %>%
+    summarize_if(is.numeric, median) %>%
+    as.data.frame()
+  rownames(gr_medians) <- gr_medians$group
+  
+  medians <- gr_medians[,nodes$name]
+  for (gene in seq_along(colnames(medians))){
+    if (medians["tolerant", gene] == max(medians[, gene])){
+      color_nodes[gene] <- "#0000FF80"
+    }
+  }
+} else if(compar == "PS"){
+  color_nodes <- rep("#0000FF80", length(nodes$name))
+  
+  gr_medians <- ft_df %>%
+    group_by(group) %>%
+    summarize_if(is.numeric, median) %>%
+    as.data.frame()
+  rownames(gr_medians) <- gr_medians$group
+  
+  medians <- gr_medians[,nodes$name]
+  for (gene in seq_along(colnames(medians))){
+    if (medians["primary_tolerant", gene] == max(medians[, gene])){
+      color_nodes[gene] <- "#00FF0080"
+    }
+  }
+}
+
+color_frame <- rep("palegreen3", length(nodes$name))
+color_frame[grep("met_",nodes$name)] <- "mediumorchid4"
+color_frame[grep("rna_",nodes$name)] <- "sandybrown"
+
+set.seed(42)
+plot(gr, vertex.size = 7, vertex.label.cex = .5, edge.width = (E(gr)$value - .7) * 20,
+     vertex.color = color_frame, vertex.frame.color= color_nodes)
+legend(1, 1, legend=c(round(min(E(gr)$value), digits = 3), round(max(E(gr)$value), digits = 3)),
+         col=c("grey", "grey"),
+         lwd=c((min(E(gr)$value) - round(min(E(gr)$value), digits = 2)) * 10,
+               (max(E(gr)$value) - round(min(E(gr)$value), digits = 2)) * 10),
+         cex=0.8,
+         title="Edge weight", text.font=4, bg='white')
+
+```
+
+We can also map the Cryostem patients in the St Louis PCA space
+```{r}
+cryo_tmp <- ft_integ_cryo %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  apply(2, scale)
+new_coords <- scale(cryo_tmp, pca$center, pca$scale) %*% pca$rotation 
+
+plot_cryo <- recip_info_cryo %>% 
+  dplyr::select(Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2],
+         GROUP = tolower(GROUP))
+
+plot_louis <- ft_2b %>% 
+  dplyr::select(Id.Cryostem.R, GROUP, age_recip, CMVStatus, PC1, PC2)
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo)))) 
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= GROUP, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("green", "blue")) +
+  theme_minimal() +
+  ggtitle("Separation of tolerant vs non tolerant recipients")
+```
+
+
+## Both cohorts
+
+I can now merge St Louis and Cryostem patients into one big table, and 
+perform PCA:
+```{r, echo = FALSE}
+ft_cryo <- ft_cryo %>% 
+  mutate(GROUP = tolower(GROUP),
+         GENDER = Gender)
+
+ft_integ_2_cohorts <- rbind(ft_integ_louis,
+                      ft_integ_cryo) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+ft_2_cohorts <- rbind(ft_louis %>% 
+                       dplyr::select(colnames(ft_integ_2_cohorts),
+                               Id.Cryostem.R, GROUP, GENDER, age_recip, CMVStatus, cmv_comp),
+                      ft_cryo %>% 
+                       dplyr::select(colnames(ft_integ_2_cohorts),
+                               Id.Cryostem.R, GROUP, GENDER, age_recip, CMVStatus, cmv_comp))
+
+ft_integ_2_cohorts <- ft_integ_2_cohorts[ft_2_cohorts$Id.Cryostem.R,]
+```
+
+```{r}
+pca <- prcomp(ft_integ_2_cohorts, center = TRUE, scale. = TRUE)
+plot(pca)
+```
+
+And plot the patients coloured per group:
+```{r, echo = FALSE}
+ft_2 <- ft_2_cohorts %>% mutate(PC1 = pca$x[,1],
+                                PC2 = pca$x[,2])
+
+
+
+ggplot(ft_2, aes(x = PC1, y = PC2, col = GROUP), label = Id.Cryostem.R) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) +
+  scale_color_manual(values = c("green", "blue"))
+  
+```
+
+```{r}
+ggplot(ft_2, aes(x = PC1, y = PC2, col = CMVStatus), label = Id.Cryostem.R) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) +
+  scale_color_manual(breaks = c("0", "1", "NA"),
+                     values = c("grey", "black", "violet"))
+
+```
+
+We can see which CyTOF, metabo 
+and transcriptomics features are pushing the patients to the right on the PCA:
+```{r, echo = FALSE}
+pc1_high_ft <- sort(pca$rotation[,1], decreasing = TRUE)[1:20]
+
+ann_row <- ft_2 %>%dplyr::select(Id.Cryostem.R, GROUP, CMVStatus) %>% 
+  column_to_rownames("Id.Cryostem.R")
+
+annotation_colors = list(
+  CMVStatus = c("0"="grey", "1"="black"),
+  GROUP = c("primary_tolerant"="green", "secondary_tolerant"="blue"))
+
+# order patients as they are ordered along PC1
+ordered_pat <- names(sort(pca$x[,1]))
+ft_heatmap <- t(ft_integ_2_cohorts[ordered_pat,])
+
+pheatmap::pheatmap(ft_heatmap[names(pc1_high_ft),], 
+                   cluster_cols = FALSE,
+                   annotation_col = ann_row,
+                   annotation_colors = annotation_colors, scale = "column")
+
+pc1_high_ft <- as.data.frame(sort(pca$rotation[,1], decreasing = TRUE)[1:28])
+
+write.xlsx(pc1_high_ft, "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/integ_2_cohorts/PTST_ft_hhigh_pc1.xlsx", row.names = TRUE)
+```
+
+
+## CyTOF alone:
+
+We can do the same analyis but focusing only on the CyTOF features. I extract 
+the 24 features for the St Louis cohort
+```{r, echo = FALSE}
+ft_recip_cyto_louis <- ft_integ_louis %>% 
+ dplyr::select(grep("cyt_", colnames(ft_integ_louis))) %>% 
+  magrittr::set_colnames(gsub("cyt_", "", colnames(.))) %>% 
+  magrittr::set_rownames(ft_integ_louis$Id.Cryostem.R)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  rownames_to_column("rn") %>% 
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("rn")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_louis <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+recip_info_louis <- couple_info_louis %>%
+  rownames_to_column("Id.Cryostem.R") %>% 
+  dplyr::filter(Id.Cryostem.R %in% rownames(ft_recip_cyto_louis))
+
+ft_recip_cyto_louis <- ft_recip_cyto_louis[recip_info_louis$Id.Cryostem.R,]
+
+head(recip_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+And for the Cryostem cohort:
+```{r, echo = FALSE}
+ft_recip_cyto_cryo <- ft_integ_cryo %>% 
+ dplyr::select(grep("cyt_", colnames(ft_integ_cryo))) %>% 
+  magrittr::set_colnames(gsub("cyt_", "", colnames(.))) %>% 
+  magrittr::set_rownames(ft_integ_cryo$Id.Cryostem.R)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_cryo <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+couple_info_cryo$CyTOF.Name[grep("R4316", couple_info_cryo$CyTOF.Name)] <- "R4316"
+
+recip_info_cryo <- couple_info_cryo %>% 
+  dplyr::filter(CyTOF.Name %in% rownames(ft_recip_cyto_cryo))
+
+ft_recip_cyto_cryo <- ft_recip_cyto_cryo[recip_info_cryo$CyTOF.Name,]
+
+head(recip_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+## PCA
+
+We can generate a PCA on the St Louis patients alone, and then map the 
+Cryostem patients on it.
+```{r}
+louis_tmp <- apply(ft_recip_cyto_louis, 2, scale)
+pca <- prcomp(louis_tmp, center = FALSE, scale. = FALSE)
+plot(pca)
+```
+
+```{r}
+plot_louis <- ft_2_cohorts %>% 
+  dplyr::filter(Id.Cryostem.R %in% rownames(ft_recip_cyto_louis))
+rownames(plot_louis) <- plot_louis$Id.Cryostem.R
+plot_louis <- plot_louis[rownames(ft_recip_cyto_louis),]
+
+plot_louis <- plot_louis %>% 
+  mutate(PC1 = pca$x[,1],
+         PC2 = pca$x[,2])
+
+ggplot(plot_louis, aes(x = PC1, y = PC2, col = GROUP)) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) +
+  scale_color_manual(values = c("green", "blue"))
+```
+
+We can then map the Cryostem cohorts in the space defined by the St Louis PCs
+```{r}
+cryo_tmp <- apply(ft_recip_cyto_cryo, 2, scale)
+new_coords <- scale(cryo_tmp, pca$center, pca$scale) %*% pca$rotation 
+
+plot_cryo <- ft_2_cohorts %>% 
+  dplyr::filter(Id.Cryostem.R %in% rownames(ft_recip_cyto_cryo))
+rownames(plot_cryo) <- plot_cryo$Id.Cryostem.R
+plot_cryo <- plot_cryo[rownames(ft_recip_cyto_cryo),]
+
+plot_cryo <- plot_cryo %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2])
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo))))
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= GROUP, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("green", "blue")) +
+  theme_minimal() +
+  ggtitle("Separation of tolerant vs non tolerant recipients")
+```
+
+
+
+## Metabolites alone:
+
+We can do the same analyis but focusing only on the metabolites. I extract 
+the 2 metabolites for the St Louis cohort
+```{r, echo = FALSE}
+recip_metabo_louis <- ft_integ_louis %>% 
+ dplyr::select(grep("met_", colnames(ft_integ_louis))) %>% 
+  magrittr::set_colnames(gsub("met_", "", colnames(.))) %>% 
+  magrittr::set_rownames(ft_integ_louis$Id.Cryostem.R)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(!is.na(METABONAME)) %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  rownames_to_column("rn") %>% 
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("rn")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_louis <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2))
+
+recip_info_louis <- couple_info_louis %>%
+  dplyr::filter(Id.Cryostem.R %in% rownames(recip_metabo_louis))
+
+recip_metabo_louis <- recip_metabo_louis[recip_info_louis$Id.Cryostem.R,]
+
+head(recip_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+And for the Cryostem cohort:
+```{r, echo = FALSE}
+recip_metabo_cryo <- ft_integ_cryo %>% 
+ dplyr::select(grep("met_", colnames(ft_integ_cryo))) %>% 
+  magrittr::set_colnames(gsub("met_", "", colnames(.))) %>% 
+  magrittr::set_rownames(ft_integ_cryo$Id.Cryostem.R)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(!is.na(METABONAME)) %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_cryo <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2),
+         METABONAME = gsub(" ", "_", METABONAME)) 
+
+recip_info_cryo <- couple_info_cryo %>% 
+  dplyr::filter(Id.Cryostem.R %in% rownames(recip_metabo_cryo))
+
+recip_metabo_cryo <- recip_metabo_cryo[recip_info_cryo$Id.Cryostem.R,]
+
+head(recip_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+## PCA
+
+We can generate a PCA on the St Louis patients alone, and then map the 
+Cryostem patients on it.
+```{r}
+louis_tmp <- apply(recip_metabo_louis, 2, scale)
+pca <- prcomp(louis_tmp, center = FALSE, scale. = FALSE)
+plot(pca)
+```
+
+```{r}
+plot_louis <- recip_info_louis %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = pca$x[,1],
+         PC2 = pca$x[,2])
+
+ggplot(plot_louis, aes(x = PC1, y = PC2, col = GROUP)) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) +
+  scale_color_manual(values = c("green", "blue"))
+```
+
+We can then map the Cryostem cohort in the space defined by the St Louis PCs
+```{r}
+cryo_tmp <- apply(recip_metabo_cryo, 2, scale)
+new_coords <- scale(cryo_tmp, pca$center, pca$scale) %*% pca$rotation 
+
+plot_cryo <- recip_info_cryo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2],
+         GROUP = tolower(GROUP))
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo)))) 
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= GROUP, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("green", "blue")) +
+  theme_minimal() +
+  ggtitle("Separation of tolerant vs non tolerant recipients")
+```
+
+Color by source of graft, ATG
+```{r}
+samp_louis <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx") %>%   dplyr::filter(Id.Cryostem.R %in% all_2plot$Id.Cryostem.R) %>% 
+  column_to_rownames("Id.Cryostem.R")
+samp_louis <- samp_louis[all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "St_Louis")],]
+
+samp_cryo <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered_ABO_incomp.xlsx") %>%  
+  dplyr::filter(CyTOF.Name %in% all_2plot$Id.Cryostem.R) %>% 
+  column_to_rownames("CyTOF.Name") 
+samp_cryo <- samp_cryo[all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "Cryostem")],]
+
+samp_2cohorts <- rbind(samp_louis %>% dplyr::select("SAL", "ABO.incompatibility", "aGVHD", "SOURCEOFGRAFT"),
+                       samp_cryo %>% dplyr::select("SAL", "ABO.compatibility", "aGVHD", "SOURCEOFGRAFT") %>% 
+                         magrittr::set_colnames(c("SAL", "ABO.incompatibility", "aGVHD", "SOURCEOFGRAFT")))
+
+all2 <- cbind(all_2plot, samp_2cohorts)
+
+ggplot(all2, aes(x= PC1, y= PC2, col= SAL, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  #scale_color_manual(values = c("green", "blue")) +
+  theme_minimal() +
+  ggtitle("Separation of recipients based on SAL")
+
+ggplot(all2, aes(x= PC1, y= PC2, col= ABO.incompatibility, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("deepskyblue", "firebrick", "lightcoral")) +
+  theme_minimal() +
+  ggtitle("Separation of recipients basad on ABO compatibility")
+
+ggplot(all2, aes(x= PC1, y= PC2, col= SOURCEOFGRAFT, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  #scale_color_manual(values = c("deepskyblue", "firebrick", "lightcoral")) +
+  theme_minimal() +
+  ggtitle("Separation of recipients basad on source of graft")
+
+```
+
+
+## RNAseq alone:
+
+We can do the same analyis but focusing only on the genes. I extract 
+the 24 genes for the St Louis cohort
+```{r, echo = FALSE}
+recip_rna_louis <- ft_integ_louis %>% 
+ dplyr::select(grep("rna_", colnames(ft_integ_louis))) %>% 
+  magrittr::set_colnames(gsub("rna_", "", colnames(.))) %>% 
+  magrittr::set_rownames(ft_integ_louis$Id.Cryostem.R)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(!is.na(FCSNAME)) %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  column_to_rownames("Id.Cryostem.R") %>% 
+  rownames_to_column("rn") %>% 
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("rn")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_louis <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2))
+
+recip_info_louis <- couple_info_louis %>%
+  dplyr::filter(Id.Cryostem.R %in% rownames(recip_rna_louis))
+
+recip_rna_louis <- recip_rna_louis[recip_info_louis$Id.Cryostem.R,]
+
+head(recip_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+And for the Cryostem cohort:
+```{r, echo = FALSE}
+recip_rna_cryo <- ft_integ_cryo %>% 
+ dplyr::select(grep("rna_", colnames(ft_integ_cryo))) %>% 
+  magrittr::set_colnames(gsub("rna_", "", colnames(.))) %>% 
+  magrittr::set_rownames(ft_integ_cryo$Id.Cryostem.R)
+
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(!is.na(FCSNAME)) %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info_cryo <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) 
+
+recip_info_cryo <- couple_info_cryo %>% 
+  dplyr::filter(Id.Cryostem.R %in% rownames(recip_rna_cryo))
+
+recip_rna_cryo <- recip_rna_cryo[recip_info_cryo$Id.Cryostem.R,]
+
+head(recip_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+## PCA
+
+We can generate a PCA on the St Louis patients alone, and then map the 
+Cryostem patients on it.
+```{r}
+louis_tmp <- apply(recip_rna_louis, 2, scale)
+pca <- prcomp(louis_tmp, center = FALSE, scale. = FALSE)
+plot(pca)
+```
+
+```{r}
+plot_louis <- recip_info_louis %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = pca$x[,1],
+         PC2 = pca$x[,2])
+
+ggplot(plot_louis, aes(x = PC1, y = PC2, col = GROUP)) +
+  geom_point() +
+  geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) +
+  scale_color_manual(values = c("green", "blue"))
+```
+
+We can then map the Cryostem cohort in the space defined by the St Louis PCs
+```{r}
+cryo_tmp <- apply(recip_rna_cryo, 2, scale)
+new_coords <- scale(cryo_tmp, pca$center, pca$scale) %*% pca$rotation 
+
+plot_cryo <- recip_info_cryo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2],
+         GROUP = tolower(GROUP))
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo)))) 
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= GROUP, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("green", "blue")) +
+  theme_minimal() +
+  ggtitle("Separation of tolerant vs non tolerant recipients")
+```

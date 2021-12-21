@@ -1,0 +1,1180 @@
+---
+title: "Comparison of donors and recipients in the St Louis and the Cryostem cohorts"
+author: "Helena"
+date: "29/03/2021"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r imports, echo=FALSE, results='hide', warning = FALSE}
+suppressPackageStartupMessages({
+  library(openxlsx)
+  library(BioGVHD)
+  library(tidyverse)
+  library(ggplot2)
+  library(patchwork)
+  library(igraph)
+  library(effsize)
+})
+options("scipen"=100)
+```
+
+# CyTOF data
+
+I can re-use the St Louis table, as it was generated in the markdown 
+"markdown_cytof_st_louis_12_12_19.Rmd. The table contained the couple values
+(i.e. donor - recipient per couple). It gives, for every couple, D-R values for 
+the percentage of cells in the 40 metaclusters, as well as the percentage of 
+cells that were positive for the different functional markers:
+```{r, echo = FALSE}
+mat_louis <- readRDS("../data/cyto/compar_donors_recipients/mat_pheno_funct_all_patients.RDS")
+```
+
+I also extract clinical information on these patients (the recipients age,
+gender compatibility, the CMV status of donors and recipients, ...)
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>%
+  mutate(GROUP = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("Id.Cryostem.R")
+  
+gender_donors <- couple_info$GENDER[c(TRUE,FALSE)]
+gender_recip <- couple_info$GENDER[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  column_to_rownames("COUPLENUMBER")
+
+couple_info_louis <- couple_info[rownames(mat_louis),]
+
+head(couple_info_louis[,c(1,2,3,5,6,55,56,57)])
+```
+
+I also extract the table of CyTOF features in the Cryostem cohort, that contains
+the values of donors - recipients as generated in the markdown 
+"markdown_cytof_st_louis_12_12_19":
+```{r, echo = FALSE}
+mat_cryo <- readRDS("../data/cyto_national/compar_donors_recipients/mat_pheno_funct_all_patients.RDS")
+```
+
+And the clinical information for the Cryostem cohort:
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  dplyr::filter(grepl("R", Id.Cryostem.R)) %>% 
+  dplyr::filter(!is.na(COUPLENUMBER)) %>% 
+  column_to_rownames("COUPLENUMBER")
+
+couple_info_cryo <- couple_info[rownames(mat_cryo),]
+
+head(couple_info_cryo[,c(5, 11,15, 56:59)])
+```
+
+```{r, echo = FALSE}
+mat_cryo_DR <- readRDS("../data/cyto_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+mat_louis_DR <- readRDS("../data/cyto/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+```
+
+
+## Comparison of primary tolerant donors vs recipients
+
+I apply a wilcoxon test for each feature, to determine whether the 
+"donor-minus-recipient" values for this feature are significantly different 
+from zero or not. A small p-value means that the D-R 
+values were significantly different from zero, and thus that the values of
+donors were significantly different from the values of the recipients.
+
+I first adjust the p-values in the Cryostem cohort, to take into account the 
+fact that we perform multiple tests, using the TSBH correction.
+
+```{r, echo = FALSE}
+pval_threshold <- 0.05
+
+colnames(mat_louis) <- gsub("X.Granzyme.B", "X.GranzymeB", colnames(mat_louis))
+colnames(mat_louis) <- gsub("X.LagT", "X.Lag3", colnames(mat_louis))
+
+Compute_wilcox <- function(mat_louis, mat_cryo, group_tmp, pval_threshold){
+  # Select only patients from the group being studied
+  mat_louis_tmp <- mat_louis %>% 
+    rownames_to_column("rn") %>% 
+    dplyr::filter(group == group_tmp) %>% 
+    dplyr::select(-group) %>% 
+    column_to_rownames("rn")
+  mat_cryo_tmp <- mat_cryo %>% 
+    rownames_to_column("rn") %>% 
+    dplyr::filter(group == group_tmp) %>% 
+    dplyr::select(-group) %>% 
+    column_to_rownames("rn")
+  
+  # Test features in the Cryostem cohort:
+  cryo_res <- plyr::ldply(seq_len(ncol(mat_cryo_tmp)), function(ft_idx){
+    tc <- wilcox.test(mat_cryo_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+    mc <- median(mat_cryo_tmp[,ft_idx])
+    
+    data.frame("Feature" = colnames(mat_cryo_tmp)[ft_idx], 
+               "pvalue" = tc, 
+               "median" = mc)
+  })
+  
+  # Test features in the St Louis cohort:
+  louis_res <- plyr::ldply(seq_len(ncol(mat_louis_tmp)), function(ft_idx){
+    tc <- wilcox.test(mat_louis_tmp[,ft_idx], mu=0, alternative="two.sided", exact = FALSE)$p.value
+    mc <- median(mat_louis_tmp[,ft_idx])
+    
+    data.frame("Feature" = colnames(mat_louis_tmp)[ft_idx], 
+               "pvalue" = tc, 
+               "median" = mc)
+  })
+  
+  # adjust pvalues in teh Cryostem cohort
+  multitest <- multtest::mt.rawp2adjp(as.numeric(cryo_res$pvalue),"TSBH")
+  cryo_res$adj_pvalue <- multitest$adjp[order(multitest$index),2]
+  
+  return(lst(mat_louis_tmp, mat_cryo_tmp, louis_res, cryo_res))
+}
+
+res_wilcox <- Compute_wilcox(mat_louis, mat_cryo, 
+                             group_tmp = "primary_tolerant", pval_threshold = pval_threshold)
+
+```
+
+We will now focus on the features that had an adjusted p-value < 0.05 in the 
+Cryostem cohort, and a p-value < 0.05 in the St Louis cohort (as the small
+amount of patients prevents us from drawing conclusions from this cohort directly).
+To assess whether the effect observed in the Cryostem cohort holds in the St Louis
+cohort, we perform a study on the effect size. 
+
+```{r, echo = FALSE}
+selected_ft_cryo <- as.character(res_wilcox$cryo_res$Feature[which(res_wilcox$cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+selected_ft_louis <- as.character(res_wilcox$louis_res$Feature[which(res_wilcox$louis_res$pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+selected_ft_both <- selected_ft_cryo[which(selected_ft_cryo %in% selected_ft_louis)]
+print(paste0(length(selected_ft_both), " features that were retained in the Cryostem cohort ", "with an adjusted pvalue < ", pval_threshold, " were also retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+```
+
+We select only the features that showed a consistent trend (the median 
+D-R value is consistantly negative in both cohorts or positive in both cohorts).
+```{r, echo = FALSE}
+find_consistent_ft <- function(res_wilcox, selected_ft_both){
+  sel_louis <- res_wilcox$louis_res %>% 
+    filter(Feature %in% selected_ft_both) %>% 
+    column_to_rownames("Feature")
+  sel_cryo <- res_wilcox$cryo_res %>% 
+    filter(Feature %in% selected_ft_both) %>% 
+    column_to_rownames("Feature")
+  
+  consistency <- lapply(selected_ft_both, function(ft){
+    sign(sel_louis[ft,"median"]) == sign(sel_cryo[ft,"median"])
+  })
+  consistent_ft_both <- selected_ft_both[unlist(consistency)]
+  return(consistent_ft_both)
+}
+
+consistent_ft_both <- find_consistent_ft(res_wilcox, selected_ft_both)
+
+print(paste0(length(consistent_ft_both), " of these features were consistently ",
+             "positive of negative in both cohorts."))
+```
+
+
+
+We can see how these different features are correlated in the patients,
+and represent this information under the form of a correlation graph, in which
+the features that were more expressed in donors than in recipients are 
+represented in light blue, and features that are overexpressed in recipients 
+compared to their respective donors are represented in yellow.
+```{r, echo = FALSE, eval = FALSE}
+data_2use <- res_wilcox$mat_louis_tmp[,consistent_ft_both] 
+#data_cryo <- mat_cryo_tmp[,c(overexpr_in_recip, underexp_in_recip)]
+cryo_tmp <- res_wilcox$mat_cryo_tmp[,consistent_ft_both]
+saveRDS(cryo_tmp, "../data/cyto_national/compar_donors_recipients/mat_for_corr_prim_DR.RDS")
+
+# find corresponding node color
+median_values <- res_wilcox$louis_res$median
+names(median_values) <- res_wilcox$louis_res$Feature
+median_values_selected <- median_values[colnames(data_2use)]
+node_attribute <- ifelse(median_values_selected<0, "darkgoldenrod1", "cadetblue1")
+
+gr <- plot_correlations2(ft_df = data_2use,
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/compar_donors_recipients/mat_for_corr_prim_DR.RDS",
+                  node_color = node_attribute,
+                  pval_threshold = 0.01)
+```
+
+I also save information such as the pvalue, median, for the retained features,
+for eventual gene ontology analyses.
+```{r, echo = FALSE}
+info_table <- res_wilcox$louis_res %>% filter(Feature %in% consistent_ft_both) %>% 
+  magrittr::set_colnames(c("Feature", "pvalue_St_Louis", "median_St_Louis"))
+info_cryo <- res_wilcox$cryo_res %>% filter(Feature %in% consistent_ft_both) %>% 
+  column_to_rownames("Feature")
+#info_cryo <- info_cryo[info_table$Feature,]
+
+info_table2 <- info_table %>% 
+  mutate(pvalue_Cryostem = info_cryo$pvalue,
+         adj_pvalue_Cryostem = info_cryo$adj_pvalue,
+         median_Cryostem = info_cryo$median)
+
+info_table2$Feature <- gsub("subst_", "", info_table2$Feature)
+write.xlsx(info_table2, file = "~/Desktop/table_features_CyTOF_primary.xlsx")
+```
+
+
+Here is a density plot that represents the distributions of the donor-recipient 
+values for the first selected feature, in both cohorts. The density plots 
+corresponding to the other selected features are plotted in a PDF file.
+When the values are mainly negative in these density plots, the feature was 
+more expressed in recipients than in donors. On the
+other hand, features in which the vaues are mainly positive in both cohorts
+were more expressed in donors than in recipients.
+```{r, echo = FALSE}
+# Function to plot densities. Takes as arguments:
+# res_wilcox
+# consistent_ft_both: the selected features
+# color_cryo: the color to use for the cryostem density plot
+# color_louis: the color to use for the st louis density plot
+plot_densities <- function(res_wilcox, consistent_ft_both,
+                           color_cryo, color_louis, pdf_name){
+  both_cohorts <- rbind(res_wilcox$mat_louis_tmp[,consistent_ft_both],
+                        res_wilcox$mat_cryo_tmp[,consistent_ft_both])
+  both_cohorts$cohort <- c(rep("St_Louis", nrow(res_wilcox$mat_louis_tmp)),
+                           rep("Cryostem", nrow(res_wilcox$mat_cryo_tmp)))
+  mu <- data.frame("nul_spot" = 0)
+  
+  # Plot first density plot in markdown
+  ft <- consistent_ft_both[1]
+  p <- ggplot(both_cohorts, aes(x = eval(parse(text = ft)), color = cohort, fill = cohort)) + 
+      geom_density(alpha = 0.4) +
+      scale_fill_manual(values=c(color_cryo, color_louis)) +
+      scale_color_manual(values=c(color_cryo, color_louis)) +
+      theme_bw() +
+      geom_vline(data=mu, aes(xintercept=nul_spot),
+                 linetype="dashed") +
+      ggtitle(ft) +
+      xlab("D-R value")
+    plot(p)
+  
+  # Plot all features in PDF
+  pdf(pdf_name, width = 6, height = 4)
+  for(ft in consistent_ft_both){
+    #print(ft)
+    p <- ggplot(both_cohorts, aes(x = eval(parse(text = ft)), color = cohort, fill = cohort)) + 
+      geom_density(alpha = 0.4) +
+      scale_fill_manual(values=c(color_cryo, color_louis)) +
+      scale_color_manual(values=c(color_cryo, color_louis)) +
+      theme_bw() +
+      geom_vline(data=mu, aes(xintercept=nul_spot),
+                 linetype="dashed") +
+      ggtitle(ft) +
+      xlab("D-R value")
+    plot(p)
+  }
+  dev.off()
+                           }
+
+plot_densities(res_wilcox, consistent_ft_both,
+               color_cryo = "green", color_louis = "forestgreen",
+               pdf_name = "~/Desktop/D-R_gvhd/densities_cytof_prim.pdf")
+```
+
+
+We can also represent the information under the form of a boxplot, in which 
+the values of donors and recipients 
+of the same couple can be seen, in both cohorts.
+
+Again, the boxplots corresponding to all selected features are printed in a PDF file.
+```{r, echo = FALSE}
+plot_boxplots <- function(consistent_ft_both, mat_louis_DR, mat_cryo_DR,
+                          group_to_plot, pdf_name){
+  
+  mat_louis_tmp <- mat_louis_DR %>%
+      rownames_to_column("rn") %>% 
+      dplyr::filter(group == group_to_plot) %>% 
+      magrittr::set_colnames(make.names(colnames(.))) %>%
+      magrittr::set_colnames(gsub("X.Granzyme.B", "X.GranzymeB", colnames(.))) %>%
+      magrittr::set_colnames(gsub("X.LagT", "X.Lag3", colnames(.))) %>%
+      mutate(patient_type = ifelse(grepl("R", rn), "R", "D"))
+  mat_cryo_tmp <- mat_cryo_DR %>%
+      rownames_to_column("rn") %>% 
+      dplyr::filter(group == group_to_plot) %>% 
+      magrittr::set_colnames(make.names(colnames(.))) %>% 
+      mutate(patient_type = ifelse(grepl("R", rn), "R", "D"))
+  
+  # Plot 1st boxplot in markdown
+  ft <- consistent_ft_both[1]
+  louis_tmp <- mat_louis_tmp %>% 
+    dplyr::select(ft, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat_louis_tmp)/2), 1:(nrow(mat_louis_tmp)/2)))
+  
+  cryo_tmp <- mat_cryo_tmp %>%
+    dplyr::select(ft, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat_cryo_tmp)/2), 1:(nrow(mat_cryo_tmp)/2)))
+  
+  ymin <- min(c(cryo_tmp$Var, louis_tmp$Var))
+  ymax <- max(c(cryo_tmp$Var, louis_tmp$Var))
+  
+  p1 <- ggplot(louis_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+    geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+    geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+    coord_cartesian(ylim = c(ymin, ymax)) +
+    ggtitle(paste0(ft," in St Louis"))+
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+  
+  p2 <- ggplot(cryo_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+    geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+    geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+    coord_cartesian(ylim = c(ymin, ymax)) +
+    ggtitle(paste0(ft," in Cryostem"))+
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+  gmix <- patchwork::wrap_plots(p1, p2)
+  print(gmix)
+  
+  # plot in PDF
+  pdf(pdf_name, height = 7, width = 10)
+  for(i in consistent_ft_both){
+    
+    louis_tmp <- mat_louis_tmp %>% 
+      dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+      mutate(id = c(1:(nrow(mat_louis_tmp)/2), 1:(nrow(mat_louis_tmp)/2)))
+    
+    cryo_tmp <- mat_cryo_tmp %>%
+      dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+      mutate(id = c(1:(nrow(mat_cryo_tmp)/2), 1:(nrow(mat_cryo_tmp)/2)))
+    
+    ymin <- min(c(cryo_tmp$Var, louis_tmp$Var))
+    ymax <- max(c(cryo_tmp$Var, louis_tmp$Var))
+    
+    p1 <- ggplot(louis_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+      geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+      geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+      coord_cartesian(ylim = c(ymin, ymax)) +
+      ggtitle(paste0(i," in St Louis"))+
+      theme(plot.title = element_text(size = 10, face = "bold")) +
+      scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+    
+    p2 <- ggplot(cryo_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+      geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+      geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+      coord_cartesian(ylim = c(ymin, ymax)) +
+      ggtitle(paste0(i," in Cryostem"))+
+      theme(plot.title = element_text(size = 10, face = "bold")) +
+      scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+    gmix <- patchwork::wrap_plots(p1, p2)
+    print(gmix)
+  }
+  dev.off()
+                          }
+
+
+
+plot_boxplots(consistent_ft_both, mat_louis_DR, mat_cryo_DR,
+              group_to_plot = "primary_tolerant",
+              pdf_name = "~/Desktop/D-R_gvhd/boxplots_cytof_prim.pdf")
+
+```
+
+
+
+## Comparison of secondary tolerant donors vs recipients
+
+I apply a wilcoxon test for each feature (D-R), to determine whether it is 
+significantly different from zero or not. A small p-value means that the D-R 
+values were significantly different from zero, and thus that the values of
+donors were significantly different from the values of the recipients.
+
+I first adjust the p-values in the Cryostem cohort, to take into account the 
+fact that we perform multiple tests, using the TSBH correction.
+
+I then plot the mean D-R values of all features in both cohorts, so that 
+we can investigate the effect size (the small number of patients in
+the St Louis cohort prevents us from testing all features in this cohorts, as the
+correction for multi testing is too strong for so many tests and so few patients.)
+```{r, echo = FALSE}
+
+res_wilcox <- Compute_wilcox(mat_louis, mat_cryo, 
+                             group_tmp = "secondary_tolerant", pval_threshold = pval_threshold)
+
+```
+
+We will now focus on the features that had an adjusted p-value < 0.05 in the 
+Cryostem cohort, and a p-value < 0.05 in the St Louis cohort (as the small
+amount of patients prevents us from drawing conclusions from this cohort directly).
+To assess whether the effect observed in the Cryostem cohort holds in the St Louis
+cohort, we perform a study on the effect size. 
+
+```{r, echo = FALSE}
+selected_ft_cryo <- as.character(res_wilcox$cryo_res$Feature[which(res_wilcox$cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+selected_ft_louis <- as.character(res_wilcox$louis_res$Feature[which(res_wilcox$louis_res$pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+selected_ft_both <- selected_ft_cryo[which(selected_ft_cryo %in% selected_ft_louis)]
+print(paste0(length(selected_ft_both), " features that were retained in the Cryostem cohort ", "with an adjusted pvalue < ", pval_threshold, " were also retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+```
+
+## Comparison of non tolerant donors vs recipients
+
+I apply a wilcoxon test for each feature (D-R), to determine whether it is 
+significantly different from zero or not. A small p-value means that the D-R 
+values were significantly different from zero, and thus that the values of
+donors were significantly different from the values of the recipients.
+
+I first adjust the p-values in the Cryostem cohort, to take into account the 
+fact that we perform multiple tests, using the TSBH correction.
+
+I then plot the mean D-R values of all features in both cohorts, so that 
+we can investigate the effect size (the small number of patients in
+the St Louis cohort prevents us from testing all features in this cohorts, as the
+correction for multi testing is too strong for so many tests and so few patients.)
+```{r, echo = FALSE}
+res_wilcox <- Compute_wilcox(mat_louis, mat_cryo, 
+                             group_tmp = "non_tolerant", pval_threshold = pval_threshold)
+
+```
+
+We will now focus on the features that had an adjusted p-value < 0.05 in the 
+Cryostem cohort, and a p-value < 0.05 in the St Louis cohort (as the small
+amount of patients prevents us from drawing conclusions from this cohort directly).
+To assess whether the effect observed in the Cryostem cohort holds in the St Louis
+cohort, we perform a study on the effect size. 
+
+```{r, echo = FALSE}
+selected_ft_cryo <- as.character(res_wilcox$cryo_res$Feature[which(res_wilcox$cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+selected_ft_louis <- as.character(res_wilcox$louis_res$Feature[which(res_wilcox$louis_res$pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+selected_ft_both <- selected_ft_cryo[which(selected_ft_cryo %in% selected_ft_louis)]
+print(paste0(length(selected_ft_both), " features that were retained in the Cryostem cohort ", "with an adjusted pvalue < ", pval_threshold, " were also retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+```
+
+We select only the features that showed a consistent trend (the median 
+D-R value is consistantly negative in both cohorts or positive in both cohorts).
+```{r, echo = FALSE}
+consistent_ft_both <- find_consistent_ft(res_wilcox, selected_ft_both)
+
+print(paste0(length(consistent_ft_both), " of these features were consistently ",
+             "positive of negative in both cohorts."))
+```
+
+
+We can see how these different features are correlated in the patients,
+and represent this information under the form of a correlation graph, in which
+the features that were more expressed in donors than in recipients are 
+represented in light blue, and features that are overexpressed in recipients 
+compared to their respective donors are represented in yellow.
+```{r, echo = FALSE, eval = FALSE}
+data_2use <- res_wilcox$mat_louis_tmp[,consistent_ft_both] 
+#data_cryo <- mat_cryo_tmp[,c(overexpr_in_recip, underexp_in_recip)]
+cryo_tmp <- res_wilcox$mat_cryo_tmp[,consistent_ft_both]
+saveRDS(cryo_tmp, "../data/cyto_national/compar_donors_recipients/mat_for_corr_non_DR.RDS")
+
+# find corresponding node color
+median_values <- res_wilcox$louis_res$median
+names(median_values) <- res_wilcox$louis_res$Feature
+median_values_selected <- median_values[colnames(data_2use)]
+node_attribute <- ifelse(median_values_selected<0, "darkgoldenrod1", "cadetblue1")
+
+gr <- plot_correlations2(ft_df = data_2use,
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/cyto_national/compar_donors_recipients/mat_for_corr_non_DR.RDS",
+                  node_color = node_attribute,
+                  pval_threshold = 0.01)
+```
+
+I also save information such as the pvalue, median, for the retained features,
+for eventual gene ontology analyses.
+```{r, echo = FALSE}
+info_table <- res_wilcox$louis_res %>% filter(Feature %in% consistent_ft_both) %>% 
+  magrittr::set_colnames(c("Feature", "pvalue_St_Louis", "median_St_Louis"))
+info_cryo <- res_wilcox$cryo_res %>% filter(Feature %in% consistent_ft_both) %>% 
+  column_to_rownames("Feature")
+#info_cryo <- info_cryo[info_table$Feature,]
+
+info_table2 <- info_table %>% 
+  mutate(pvalue_Cryostem = info_cryo$pvalue,
+         adj_pvalue_Cryostem = info_cryo$adj_pvalue,
+         median_Cryostem = info_cryo$median)
+
+info_table2$Feature <- gsub("subst_", "", info_table2$Feature)
+write.xlsx(info_table2, file = "~/Desktop/table_features_CyTOF_non.xlsx")
+```
+
+
+Here is a density plot that represents the distributions of the donor-recipient 
+values for the first selected feature, in both cohorts. The density plots 
+corresponding to the other selected features are plotted in a PDF file.
+When the values are mainly negative in these density plots, the feature was 
+more expressed in recipients than in donors. On the
+other hand, features in which the vaues are mainly positive in both cohorts
+were more expressed in donors than in recipients.
+```{r, echo = FALSE}
+plot_densities(res_wilcox, consistent_ft_both,
+               color_cryo = "brown1", color_louis = "red3",
+               pdf_name = "~/Desktop/D-R_gvhd/densities_cytof_non.pdf")
+```
+
+We can also represent the information under the form of a boxplot, in which 
+the values of donors and recipients 
+of the same couple can be seen, in both cohorts.
+
+Again, the boxplots corresponding to all selected features are printed in a PDF file.
+```{r, echo = FALSE}
+plot_boxplots(consistent_ft_both, mat_louis_DR, mat_cryo_DR,
+              group_to_plot = "non_tolerant",
+              pdf_name = "~/Desktop/D-R_gvhd/boxplots_cytof_non.pdf")
+
+```
+
+
+# Metabolomics data
+
+I can re-use the St Louis table, as it was generated in the markdown 
+"markdown_metabo_st_louis_3/01/20.Rmd". The table contained the couple values
+(i.e. donor - recipient per couple). It gives, for every couple, D-R values for 
+the metabolites:
+```{r, echo = FALSE}
+mat_louis <- readRDS("../data/metabo/compar_donors_recipients/mat_all_patients.RDS")
+```
+
+
+I also extract the table of metabolites in the Cryostem cohort, that contains
+the values of donors - recipients as generated in the markdown 
+"markdown_metabo_cryostem_3/01/2020":
+```{r, echo = FALSE}
+mat_cryo <- readRDS("../data/metabo_national/compar_donors_recipients/mat_all_patients.RDS")
+```
+
+
+```{r, echo = FALSE}
+mat_cryo_DR <- readRDS("../data/metabo_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+mat_louis_DR <- readRDS("../data/metabo/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+```
+
+
+## Comparison of primary tolerant donors vs recipients
+
+I apply a wilcoxon test for each feature, to determine whether the 
+"donor-minus-recipient" values for this feature are significantly different 
+from zero or not. A small p-value means that the D-R 
+values were significantly different from zero, and thus that the values of
+donors were significantly different from the values of the recipients.
+
+I first adjust the p-values in the Cryostem cohort, to take into account the 
+fact that we perform multiple tests, using the TSBH correction.
+
+```{r, echo = FALSE}
+pval_threshold <- 0.05
+
+res_wilcox <- Compute_wilcox(mat_louis, mat_cryo, 
+                             group_tmp = "primary_tolerant", pval_threshold = pval_threshold)
+
+```
+
+We will now focus on the features that had an adjusted p-value < 0.05 in the 
+Cryostem cohort, and a p-value < 0.05 in the St Louis cohort (as the small
+amount of patients prevents us from drawing conclusions from this cohort directly).
+To assess whether the effect observed in the Cryostem cohort holds in the St Louis
+cohort, we perform a study on the effect size. 
+
+```{r, echo = FALSE}
+selected_ft_cryo <- as.character(res_wilcox$cryo_res$Feature[which(res_wilcox$cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+selected_ft_louis <- as.character(res_wilcox$louis_res$Feature[which(res_wilcox$louis_res$pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+selected_ft_both <- selected_ft_cryo[which(selected_ft_cryo %in% selected_ft_louis)]
+print(paste0(length(selected_ft_both), " features that were retained in the Cryostem cohort ", "with an adjusted pvalue < ", pval_threshold, " were also retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+```
+
+
+
+## Comparison of secondary tolerant donors vs recipients
+
+I apply a wilcoxon test for each feature (D-R), to determine whether it is 
+significantly different from zero or not. A small p-value means that the D-R 
+values were significantly different from zero, and thus that the values of
+donors were significantly different from the values of the recipients.
+
+I first adjust the p-values in the Cryostem cohort, to take into account the 
+fact that we perform multiple tests, using the TSBH correction.
+
+I then plot the mean D-R values of all features in both cohorts, so that 
+we can investigate the effect size (the small number of patients in
+the St Louis cohort prevents us from testing all features in this cohorts, as the
+correction for multi testing is too strong for so many tests and so few patients.)
+```{r, echo = FALSE}
+
+res_wilcox <- Compute_wilcox(mat_louis, mat_cryo, 
+                             group_tmp = "secondary_tolerant", pval_threshold = pval_threshold)
+
+```
+
+We will now focus on the features that had an adjusted p-value < 0.05 in the 
+Cryostem cohort, and a p-value < 0.05 in the St Louis cohort (as the small
+amount of patients prevents us from drawing conclusions from this cohort directly).
+To assess whether the effect observed in the Cryostem cohort holds in the St Louis
+cohort, we perform a study on the effect size. 
+
+```{r, echo = FALSE}
+selected_ft_cryo <- as.character(res_wilcox$cryo_res$Feature[which(res_wilcox$cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+selected_ft_louis <- as.character(res_wilcox$louis_res$Feature[which(res_wilcox$louis_res$pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+selected_ft_both <- selected_ft_cryo[which(selected_ft_cryo %in% selected_ft_louis)]
+print(paste0(length(selected_ft_both), " features that were retained in the Cryostem cohort ", "with an adjusted pvalue < ", pval_threshold, " were also retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+```
+
+## Comparison of non tolerant donors vs recipients
+
+I apply a wilcoxon test for each feature (D-R), to determine whether it is 
+significantly different from zero or not. A small p-value means that the D-R 
+values were significantly different from zero, and thus that the values of
+donors were significantly different from the values of the recipients.
+
+I first adjust the p-values in the Cryostem cohort, to take into account the 
+fact that we perform multiple tests, using the TSBH correction.
+
+I then plot the mean D-R values of all features in both cohorts, so that 
+we can investigate the effect size (the small number of patients in
+the St Louis cohort prevents us from testing all features in this cohorts, as the
+correction for multi testing is too strong for so many tests and so few patients.)
+```{r, echo = FALSE}
+res_wilcox <- Compute_wilcox(mat_louis, mat_cryo, 
+                             group_tmp = "non_tolerant", pval_threshold = pval_threshold)
+
+```
+
+We will now focus on the features that had an adjusted p-value < 0.05 in the 
+Cryostem cohort, and a p-value < 0.05 in the St Louis cohort (as the small
+amount of patients prevents us from drawing conclusions from this cohort directly).
+To assess whether the effect observed in the Cryostem cohort holds in the St Louis
+cohort, we perform a study on the effect size. 
+
+```{r, echo = FALSE}
+selected_ft_cryo <- as.character(res_wilcox$cryo_res$Feature[which(res_wilcox$cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+selected_ft_louis <- as.character(res_wilcox$louis_res$Feature[which(res_wilcox$louis_res$pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+selected_ft_both <- selected_ft_cryo[which(selected_ft_cryo %in% selected_ft_louis)]
+print(paste0(length(selected_ft_both), " features that were retained in the Cryostem cohort ", "with an adjusted pvalue < ", pval_threshold, " were also retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+```
+
+
+# Transcriptomics data
+
+I can re-use the St Louis table, as it was generated in the markdown 
+"markdown_rnaseq_st_louis_6012020.Rmd". The table contained the couple values
+(i.e. donor - recipient per couple). It gives, for every couple, D-R values for 
+the percentage of cells in the 40 metaclusters, as well as the percentage of 
+cells that were positive for the different functional markers:
+```{r, echo = FALSE}
+mat_louis <- readRDS("../data/RNAseq/compar_donors_recipients/mat_all_patients.RDS")
+```
+
+I also extract the table of CyTOF features in the Cryostem cohort, that contains
+the values of donors - recipients as generated in the markdown 
+"markown_rnaseq_cryostem_9/10":
+```{r, echo = FALSE}
+mat_cryo <- readRDS("../data/RNA_seq_national/compar_donors_recipients/mat_all_patients.RDS")
+```
+
+
+```{r, echo = FALSE}
+mat_cryo_DR <- readRDS("../data/RNA_seq_national/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+mat_louis_DR <- readRDS("../data/RNAseq/compar_donors_recipients/mat_pheno_funct_donors_and_recipients.RDS")
+```
+
+
+## Comparison of primary tolerant donors vs recipients
+
+I apply a wilcoxon test for each feature, to determine whether the 
+"donor-minus-recipient" values for this feature are significantly different 
+from zero or not. A small p-value means that the D-R 
+values were significantly different from zero, and thus that the values of
+donors were significantly different from the values of the recipients.
+
+I first adjust the p-values in the Cryostem cohort, to take into account the 
+fact that we perform multiple tests, using the TSBH correction.
+
+```{r, echo = FALSE}
+pval_threshold <- 0.05
+
+res_wilcox <- Compute_wilcox(mat_louis, mat_cryo, 
+                             group_tmp = "primary_tolerant", pval_threshold = pval_threshold)
+
+```
+
+We will now focus on the features that had an adjusted p-value < 0.05 in the 
+Cryostem cohort, and a p-value < 0.05 in the St Louis cohort (as the small
+amount of patients prevents us from drawing conclusions from this cohort directly).
+To assess whether the effect observed in the Cryostem cohort holds in the St Louis
+cohort, we perform a study on the effect size. 
+
+```{r, echo = FALSE}
+selected_ft_cryo <- as.character(res_wilcox$cryo_res$Feature[which(res_wilcox$cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+selected_ft_louis <- as.character(res_wilcox$louis_res$Feature[which(res_wilcox$louis_res$pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+selected_ft_both <- selected_ft_cryo[which(selected_ft_cryo %in% selected_ft_louis)]
+print(paste0(length(selected_ft_both), " features that were retained in the Cryostem cohort ", "with an adjusted pvalue < ", pval_threshold, " were also retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+```
+
+We select only the features that showed a consistent trend (the median 
+D-R value is consistantly negative in both cohorts or positive in both cohorts).
+```{r, echo = FALSE}
+find_consistent_ft <- function(res_wilcox, selected_ft_both){
+  sel_louis <- res_wilcox$louis_res %>% 
+    filter(Feature %in% selected_ft_both) %>% 
+    column_to_rownames("Feature")
+  sel_cryo <- res_wilcox$cryo_res %>% 
+    filter(Feature %in% selected_ft_both) %>% 
+    column_to_rownames("Feature")
+  
+  consistency <- lapply(selected_ft_both, function(ft){
+    sign(sel_louis[ft,"median"]) == sign(sel_cryo[ft,"median"])
+  })
+  consistent_ft_both <- selected_ft_both[unlist(consistency)]
+  return(consistent_ft_both)
+}
+consistent_ft_both <- find_consistent_ft(res_wilcox, selected_ft_both)
+
+print(paste0(length(consistent_ft_both), " of these features were consistently ",
+             "positive of negative in both cohorts."))
+```
+
+
+We can see how these different features are correlated in the patients,
+and represent this information under the form of a correlation graph, in which
+the features that were more expressed in donors than in recipients are 
+represented in light blue, and features that are overexpressed in recipients 
+compared to their respective donors are represented in yellow.
+```{r, echo = FALSE, eval = FALSE}
+data_2use <- res_wilcox$mat_louis_tmp[,consistent_ft_both] 
+#data_cryo <- mat_cryo_tmp[,c(overexpr_in_recip, underexp_in_recip)]
+cryo_tmp <- res_wilcox$mat_cryo_tmp[,consistent_ft_both]
+saveRDS(cryo_tmp, "../data/RNA_seq_national/compar_donors_recipients/mat_for_corr_prim_DR.RDS")
+
+# find corresponding node color
+median_values <- res_wilcox$louis_res$median
+names(median_values) <- res_wilcox$louis_res$Feature
+median_values_selected <- median_values[colnames(data_2use)]
+node_attribute <- ifelse(median_values_selected<0, "darkgoldenrod1", "cadetblue1")
+
+gr <- plot_correlations2(ft_df = data_2use,
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNA_seq_national/compar_donors_recipients/mat_for_corr_prim_DR.RDS",
+                  node_color = node_attribute,
+                  pval_threshold = 0.01)
+```
+
+I also save information such as the pvalue, median, for the retained features,
+for eventual gene ontology analyses.
+```{r, echo = FALSE}
+info_table <- res_wilcox$louis_res %>% filter(Feature %in% consistent_ft_both) %>% 
+  magrittr::set_colnames(c("Feature", "pvalue_St_Louis", "median_St_Louis"))
+info_cryo <- res_wilcox$cryo_res %>% filter(Feature %in% consistent_ft_both) %>% 
+  column_to_rownames("Feature")
+#info_cryo <- info_cryo[info_table$Feature,]
+
+info_table2 <- info_table %>% 
+  mutate(pvalue_Cryostem = info_cryo$pvalue,
+         adj_pvalue_Cryostem = info_cryo$adj_pvalue,
+         median_Cryostem = info_cryo$median)
+
+info_table2$Feature <- gsub("subst_", "", info_table2$Feature)
+write.xlsx(info_table2, file = "~/Desktop/table_features_RNAseq_primary.xlsx")
+```
+
+
+
+## Comparison of secondary tolerant donors vs recipients
+
+I apply a wilcoxon test for each feature (D-R), to determine whether it is 
+significantly different from zero or not. A small p-value means that the D-R 
+values were significantly different from zero, and thus that the values of
+donors were significantly different from the values of the recipients.
+
+I first adjust the p-values in the Cryostem cohort, to take into account the 
+fact that we perform multiple tests, using the TSBH correction.
+
+I then plot the mean D-R values of all features in both cohorts, so that 
+we can investigate the effect size (the small number of patients in
+the St Louis cohort prevents us from testing all features in this cohorts, as the
+correction for multi testing is too strong for so many tests and so few patients.)
+```{r, echo = FALSE}
+
+res_wilcox <- Compute_wilcox(mat_louis, mat_cryo, 
+                             group_tmp = "secondary_tolerant", pval_threshold = pval_threshold)
+
+```
+
+We will now focus on the features that had an adjusted p-value < 0.05 in the 
+Cryostem cohort, and a p-value < 0.05 in the St Louis cohort (as the small
+amount of patients prevents us from drawing conclusions from this cohort directly).
+To assess whether the effect observed in the Cryostem cohort holds in the St Louis
+cohort, we perform a study on the effect size. 
+
+```{r, echo = FALSE}
+pval_threshold <- 0.05
+
+selected_ft_cryo <- as.character(res_wilcox$cryo_res$Feature[which(res_wilcox$cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+selected_ft_louis <- as.character(res_wilcox$louis_res$Feature[which(res_wilcox$louis_res$pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+selected_ft_both <- selected_ft_cryo[which(selected_ft_cryo %in% selected_ft_louis)]
+print(paste0(length(selected_ft_both), " features that were retained in the Cryostem cohort ", "with an adjusted pvalue < ", pval_threshold, " were also retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold, ": ", selected_ft_both))
+
+```
+
+We select only the features that showed a consistent trend (the median 
+D-R value is consistantly negative in both cohorts or positive in both cohorts).
+```{r, echo = FALSE}
+consistent_ft_both <- find_consistent_ft(res_wilcox, selected_ft_both)
+
+print(paste0(length(consistent_ft_both), " of these features were consistently ",
+             "positive of negative in both cohorts."))
+```
+
+Here is a density plot that represents the distributions of the donor-recipient 
+values for the first selected feature, in both cohorts.
+When the values are mainly negative in these density plots, the feature was 
+more expressed in recipients than in donors. On the
+other hand, features in which the vaues are mainly positive in both cohorts
+were more expressed in donors than in recipients.
+```{r, echo = FALSE}
+plot_densities2 <- function(res_wilcox, consistent_ft_both,
+                           color_cryo, color_louis, pdf_name){
+  both_cohorts <- rbind(data.frame("subst_MOCS1" = res_wilcox$mat_louis_tmp[,consistent_ft_both]),
+                        data.frame("subst_MOCS1" = res_wilcox$mat_cryo_tmp[,consistent_ft_both]))
+  both_cohorts$cohort <- c(rep("St_Louis", nrow(res_wilcox$mat_louis_tmp)),
+                           rep("Cryostem", nrow(res_wilcox$mat_cryo_tmp)))
+  mu <- data.frame("nul_spot" = 0)
+  
+  # Plot first density plot in markdown
+  ft <- consistent_ft_both[1]
+  p <- ggplot(both_cohorts, aes(x = eval(parse(text = ft)), color = cohort, fill = cohort)) + 
+      geom_density(alpha = 0.4) +
+      scale_fill_manual(values=c(color_cryo, color_louis)) +
+      scale_color_manual(values=c(color_cryo, color_louis)) +
+      theme_bw() +
+      geom_vline(data=mu, aes(xintercept=nul_spot),
+                 linetype="dashed") +
+      ggtitle(ft) +
+      xlab("D-R value")
+    plot(p)
+  
+  # Plot all features in PDF
+  pdf(pdf_name, width = 6, height = 4)
+  for(ft in consistent_ft_both){
+    #print(ft)
+    p <- ggplot(both_cohorts, aes(x = eval(parse(text = ft)), color = cohort, fill = cohort)) + 
+      geom_density(alpha = 0.4) +
+      scale_fill_manual(values=c(color_cryo, color_louis)) +
+      scale_color_manual(values=c(color_cryo, color_louis)) +
+      theme_bw() +
+      geom_vline(data=mu, aes(xintercept=nul_spot),
+                 linetype="dashed") +
+      ggtitle(ft) +
+      xlab("D-R value")
+    plot(p)
+  }
+  dev.off()
+                           }
+
+plot_densities2(res_wilcox, consistent_ft_both,
+               color_cryo = "deepskyblue", color_louis = "blue",
+               pdf_name = "~/Desktop/D-R_gvhd/densities_RNAseq_sec.pdf")
+```
+
+We can also represent the information under the form of a boxplot, in which 
+the values of donors and recipients 
+of the same couple can be seen, in both cohorts.
+
+Again, the boxplots corresponding to all selected features are printed in a PDF file.
+```{r, echo = FALSE}
+plot_boxplots2 <- function(consistent_ft_both, mat_louis_DR, mat_cryo_DR,
+                          group_to_plot, pdf_name){
+  
+  mat_louis_tmp <- mat_louis_DR %>%
+      rownames_to_column("rn") %>% 
+      dplyr::filter(GROUP == group_to_plot) %>% 
+      magrittr::set_colnames(make.names(colnames(.))) %>%
+      mutate(patient_type = ifelse(grepl("R", rn), "R", "D"))
+  mat_cryo_tmp <- mat_cryo_DR %>%
+      rownames_to_column("rn") %>% 
+      dplyr::filter(GROUP == group_to_plot) %>% 
+      magrittr::set_colnames(make.names(colnames(.))) %>% 
+      mutate(patient_type = ifelse(grepl("R", rn), "R", "D"))
+  
+  # Plot 1st boxplot in markdown
+  ft <- gsub("subst_", "", consistent_ft_both[1])
+  louis_tmp <- mat_louis_tmp %>% 
+    dplyr::select(ft, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat_louis_tmp)/2), 1:(nrow(mat_louis_tmp)/2)))
+  
+  cryo_tmp <- mat_cryo_tmp %>%
+    dplyr::select(ft, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+    mutate(id = c(1:(nrow(mat_cryo_tmp)/2), 1:(nrow(mat_cryo_tmp)/2)))
+  
+  ymin <- min(c(cryo_tmp$Var, louis_tmp$Var))
+  ymax <- max(c(cryo_tmp$Var, louis_tmp$Var))
+  
+  p1 <- ggplot(louis_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+    geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+    geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+    coord_cartesian(ylim = c(ymin, ymax)) +
+    ggtitle(paste0(ft," in St Louis"))+
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+  
+  p2 <- ggplot(cryo_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+    geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+    geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+    coord_cartesian(ylim = c(ymin, ymax)) +
+    ggtitle(paste0(ft," in Cryostem"))+
+    theme(plot.title = element_text(size = 10, face = "bold")) +
+    scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+  gmix <- patchwork::wrap_plots(p1, p2)
+  print(gmix)
+  
+  # plot in PDF
+  pdf(pdf_name, height = 7, width = 10)
+  for(i in consistent_ft_both){
+    i <- gsub("subst_", "", i)
+    louis_tmp <- mat_louis_tmp %>% 
+      dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+      mutate(id = c(1:(nrow(mat_louis_tmp)/2), 1:(nrow(mat_louis_tmp)/2)))
+    
+    cryo_tmp <- mat_cryo_tmp %>%
+      dplyr::select(i, patient_type) %>% magrittr::set_colnames(c("Var", "group")) %>% 
+      mutate(id = c(1:(nrow(mat_cryo_tmp)/2), 1:(nrow(mat_cryo_tmp)/2)))
+    
+    ymin <- min(c(cryo_tmp$Var, louis_tmp$Var))
+    ymax <- max(c(cryo_tmp$Var, louis_tmp$Var))
+    
+    p1 <- ggplot(louis_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+      geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+      geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+      coord_cartesian(ylim = c(ymin, ymax)) +
+      ggtitle(paste0(i," in St Louis"))+
+      theme(plot.title = element_text(size = 10, face = "bold")) +
+      scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+    
+    p2 <- ggplot(cryo_tmp) + geom_boxplot(aes(x = group, y = Var, col = group)) +
+      geom_point(aes(x = group, y = Var, col = group)) + theme_minimal() +
+      geom_line(aes(x = group, y = Var, group = id), col = "grey") +
+      coord_cartesian(ylim = c(ymin, ymax)) +
+      ggtitle(paste0(i," in Cryostem"))+
+      theme(plot.title = element_text(size = 10, face = "bold")) +
+      scale_color_manual(values = c("cadetblue3", "darkgoldenrod1"))
+    gmix <- patchwork::wrap_plots(p1, p2)
+    print(gmix)
+  }
+  dev.off()
+}
+
+plot_boxplots2(consistent_ft_both, mat_louis_DR, mat_cryo_DR,
+              group_to_plot = "secondary_tolerant",
+              pdf_name = "~/Desktop/D-R_gvhd/boxplots_RNAseq_secondary.pdf")
+
+```
+
+## Comparison of non tolerant donors vs recipients
+
+I apply a wilcoxon test for each feature (D-R), to determine whether it is 
+significantly different from zero or not. A small p-value means that the D-R 
+values were significantly different from zero, and thus that the values of
+donors were significantly different from the values of the recipients.
+
+I first adjust the p-values in the Cryostem cohort, to take into account the 
+fact that we perform multiple tests, using the TSBH correction.
+
+I then plot the mean D-R values of all features in both cohorts, so that 
+we can investigate the effect size (the small number of patients in
+the St Louis cohort prevents us from testing all features in this cohorts, as the
+correction for multi testing is too strong for so many tests and so few patients.)
+```{r, echo = FALSE}
+res_wilcox <- Compute_wilcox(mat_louis, mat_cryo, 
+                             group_tmp = "non_tolerant", pval_threshold = pval_threshold)
+
+```
+
+We will now focus on the features that had an adjusted p-value < 0.05 in the 
+Cryostem cohort, and a p-value < 0.05 in the St Louis cohort (as the small
+amount of patients prevents us from drawing conclusions from this cohort directly).
+To assess whether the effect observed in the Cryostem cohort holds in the St Louis
+cohort, we perform a study on the effect size. 
+
+```{r, echo = FALSE}
+selected_ft_cryo <- as.character(res_wilcox$cryo_res$Feature[which(res_wilcox$cryo_res$adj_pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_cryo), " features were retained in the Cryostem cohort ",
+             "with an adjusted pvalue < ", pval_threshold))
+
+selected_ft_louis <- as.character(res_wilcox$louis_res$Feature[which(res_wilcox$louis_res$pvalue<=pval_threshold)])
+print(paste0(length(selected_ft_louis), " features were retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+selected_ft_both <- selected_ft_cryo[which(selected_ft_cryo %in% selected_ft_louis)]
+print(paste0(length(selected_ft_both), " features that were retained in the Cryostem cohort ", "with an adjusted pvalue < ", pval_threshold, " were also retained in the St Louis cohort ",
+             "with a pvalue < ", pval_threshold))
+
+```
+
+We select only the features that showed a consistent trend (the median 
+D-R value is consistantly negative in both cohorts or positive in both cohorts).
+```{r, echo = FALSE}
+consistent_ft_both <- find_consistent_ft(res_wilcox, selected_ft_both)
+
+print(paste0(length(consistent_ft_both), " of these features were consistently ",
+             "positive or negative in both cohorts."))
+```
+
+We can see how these different features are correlated in the patients,
+and represent this information under the form of a correlation graph, in which
+the features that were more expressed in donors than in recipients are 
+represented in light blue, and features that are overexpressed in recipients 
+compared to their respective donors are represented in yellow.
+```{r, echo = FALSE, eval = FALSE}
+data_2use <- res_wilcox$mat_louis_tmp[,consistent_ft_both] 
+#data_cryo <- mat_cryo_tmp[,c(overexpr_in_recip, underexp_in_recip)]
+cryo_tmp <- res_wilcox$mat_cryo_tmp[,consistent_ft_both]
+saveRDS(cryo_tmp, "../data/RNA_seq_national/compar_donors_recipients/mat_for_corr_non_DR.RDS")
+
+# find corresponding node color
+median_values <- res_wilcox$louis_res$median
+names(median_values) <- res_wilcox$louis_res$Feature
+median_values_selected <- median_values[colnames(data_2use)]
+node_attribute <- ifelse(median_values_selected<0, "darkgoldenrod1", "cadetblue1")
+
+gr <- plot_correlations2(ft_df = data_2use,
+                  ft_file_other_cohort = "~/Documents/VIB/Projects/Integrative_Paris/Integrative/outputs/data/RNA_seq_national/compar_donors_recipients/mat_for_corr_non_DR.RDS",
+                  node_color = node_attribute,
+                  pval_threshold = 0.01)
+```
+
+I also save information such as the pvalue, median, for the retained features,
+for eventual gene ontology analyses.
+```{r, echo = FALSE}
+info_table <- res_wilcox$louis_res %>% filter(Feature %in% consistent_ft_both) %>% 
+  magrittr::set_colnames(c("Feature", "pvalue_St_Louis", "median_St_Louis"))
+info_cryo <- res_wilcox$cryo_res %>% filter(Feature %in% consistent_ft_both) %>% 
+  column_to_rownames("Feature")
+#info_cryo <- info_cryo[info_table$Feature,]
+
+if(all(info_table$Feature == rownames(info_cryo))){
+  info_table2 <- info_table %>% 
+  mutate(pvalue_Cryostem = info_cryo$pvalue,
+         adj_pvalue_Cryostem = info_cryo$adj_pvalue,
+         median_Cryostem = info_cryo$median)
+
+info_table2$Feature <- gsub("subst_", "", info_table2$Feature)
+write.xlsx(info_table2, file = "~/Desktop/table_features_RNAseq_non_tolerant.xlsx")
+}
+```

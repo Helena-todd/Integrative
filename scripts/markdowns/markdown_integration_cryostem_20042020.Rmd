@@ -1,0 +1,1653 @@
+---
+title: "BioGVHD project: integration of CyTOF, Metabolomics and RNA features in the Cryostem cohort"
+author: "Helena"
+date: "20/04/2020"
+output:
+  html_document:
+    toc: true
+    toc_depth: 4
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r imports, echo=FALSE, results='hide', warning = FALSE}
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(openxlsx)
+  #library(BioGVHD)
+  library(data.table)
+  library(ggplot2)
+  library(igraph)
+})
+options("scipen"=100)
+```
+
+## Focusing on the recipients
+
+We can first focus on the features that we extracted as informative in the 
+recipients, to see if, taken together, they would be more informative than 
+when working on one data type alone.
+
+### Tolerant versus non tolerant recipients
+
+Since looking at differences between the three groups consisting of primary, 
+secondary and non tolerant patients at the same time wasn't feasible, we divided
+our problem in two distinct sub-problems. We first focus on the features that
+seemed to play a role when trying to disinguish non tolerant from tolerant 
+recipients.
+
+We first need to gather the features that were extracted from the three data
+sources:
+
+- CyTOF features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+tmp <- readRDS("../data/cyto_national/log2/recip/pctgs_sel_ft_recip_TNT_90.RDS")
+sel_beh <- read.xlsx("../data/cyto_national/log2/recip/perm_val_beh_TNT_90_thresh.xlsx")
+
+ft_recip_cyto <- tmp %>% 
+  dplyr::select(sel_beh$features) 
+```
+
+- Metabolomics features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+tmp <- readRDS("../data/metabo_national/v2_012020/recip/pctgs_sel_ft_recip_TNT_90.RDS")
+sel_beh <- read.xlsx("../data/metabo_national/v2_012020/recip/perm_val_beh_TNT_90_thresh.xlsx")
+
+ft_recip_metabo <- tmp %>% 
+  dplyr::select(sel_beh$features) 
+```
+
+- Transcriptomics features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+load("../data/RNA_seq_national/recip_only/rna_recip_cryo_TNT_90.RData")
+sel_beh <- read.xlsx("../data/RNAseq/recip_only/perm_val_beh_TNT_90_thresh.xlsx")
+
+ft_recip_transcripto <- rna_recip_cryo_TNT_90 %>% 
+  dplyr::select(sel_beh$sel_beh) 
+```
+
+I extract informations on the recipients group, age, gender, ... to be able to 
+use this information later on.
+
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered_ABO_incomp.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(METABONAME)) %>%  
+  dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+head(couple_info[,c(5, 11,15, 56:59)])
+```
+
+I add a prefix ("cyt_", "rna_" or "met_") in front of the features names, and 
+I then merge all features together:
+
+```{r, echo = FALSE}
+colnames(ft_recip_cyto) <- paste0("cyt_", colnames(ft_recip_cyto))
+colnames(ft_recip_metabo) <- paste0("met_", colnames(ft_recip_metabo))
+
+# I change the rownames in the metabo file so that they correspond to cryostem Ids
+metabo_names <- rownames(ft_recip_metabo)
+metabo_names2 <- gsub("_", " ", metabo_names)
+info_tmp <- couple_info %>% 
+  rownames_to_column("rn") %>% 
+  column_to_rownames("METABONAME")
+info_tmp2 <- info_tmp[metabo_names2,]
+rownames(ft_recip_metabo) <- info_tmp2$CyTOF.Name
+
+colnames(ft_recip_transcripto) <- paste0("rna_", colnames(ft_recip_transcripto))
+
+ft_integ <- ft_recip_cyto %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  inner_join(ft_recip_metabo %>% rownames_to_column("Id.Cryostem.R") , by = c("Id.Cryostem.R")) %>% 
+  inner_join(ft_recip_transcripto %>% rownames_to_column("Id.Cryostem.R") , by = c("Id.Cryostem.R")) 
+print(paste0("We have information on the CyTOF, metabolomics and transcriptomics data for ",
+             nrow(ft_integ), " patients in the Cryostem cohort."))
+
+saveRDS(ft_integ, file = "../data/integ_national/cyt_met_rna_beh_features.RDS")
+```
+
+#### Volcano plot analysis
+
+We can do a volcano plot on the CyTOF features, metabolites and genes of the non
+versus tolerant recipients:
+```{r, echo = FALSE}
+complete_patients <- ft_integ$Id.Cryostem.R
+info_complete_patients <- couple_info %>%
+  rownames_to_column("metaboname") %>% 
+  dplyr::filter(CyTOF.Name %in% complete_patients) %>% 
+  arrange(CyTOF.Name) %>% 
+  mutate(group = as.character(group),
+         Id.Cryostem.R = CyTOF.Name)
+info_complete_patients$group[which(info_complete_patients$group != "non_tolerant")] <- "tolerant"
+info_complete_patients$group <- as.factor(info_complete_patients$group)
+
+mat4volcano <- ft_integ %>% 
+  column_to_rownames("Id.Cryostem.R")
+info_tmp <- info_complete_patients %>% 
+  column_to_rownames("Id.Cryostem.R")
+info_tmp <- info_tmp[rownames(mat4volcano),]
+mat4volcano <- mat4volcano %>% 
+  rownames_to_column("rn") %>% 
+  mutate(group = info_tmp$group) %>% 
+  dplyr::select(group, everything()) %>% 
+  column_to_rownames("rn")
+```
+
+```{r, echo = FALSE}
+res <- metabolomics::TwoGroup(mat4volcano)
+# pdf("~/Desktop/volcanoplot.pdf", width = 24, height = 20)
+metabolomics::VolcanoPlot(res$output[,4], res$output[,2], cexlab = 0.6)
+# dev.off()
+
+metabolomics::MetBoxPlots(mat4volcano, "rna_EIF2S3B",cols = c("red", "blue"),main = "rna_EIF2S3B")
+metabolomics::MetBoxPlots(mat4volcano, "cyt_X.CD38._23_DN..86.....CD8low..13...TSCM.like",cols = c("red", "blue"),main = "cyt_X.CD38._23_DN..86.....CD8low..13...TSCM.like")
+metabolomics::MetBoxPlots(mat4volcano, "rna_ENSG00000218713",cols = c("red", "blue"),main = "rna_ENSG00000218713")
+```
+
+<!-- #### Correlation analysis -->
+
+<!-- ```{r} -->
+<!-- #pdf("~/Desktop/correlationplot_integration_recip_TNT.pdf", width = 16, height = 16) -->
+<!-- gr <- plot_correlations(mat4volcano, compar = "TNT") -->
+<!-- #dev.off() -->
+
+<!-- ``` -->
+
+#### Principal component analysis
+
+In the St Louis cohort, we were able to identify a nice separation between 
+the tolerant and non tolerant recipients when integrating the features that we 
+found of interest in the CyTOF, metabolomics and transcriptomics data.
+
+To see if these observations can be confirmed, we will now map the recipients
+of the Cryostem cohort in the PCA space that was defined by the recipients of 
+the St Louis cohort.
+```{r, echo = FALSE}
+mat4pca <- ft_integ %>% 
+  dplyr::select(-Id.Cryostem.R) %>%  
+  apply(2, scale) %>% 
+  as.matrix() 
+rownames(mat4pca) <- ft_integ$Id.Cryostem.R
+
+mat_withinfo <- left_join(ft_integ, 
+                          couple_info %>% mutate(Id.Cryostem.R = CyTOF.Name), 
+                          by = "Id.Cryostem.R")
+
+pca_louis <- readRDS("../data/integ/pca_TNT_st_louis_recip.RDS")
+
+cryo_tmp <- apply(mat4pca, 2, scale)
+new_coords <- scale(cryo_tmp, pca_louis$pca$center, pca_louis$pca$scale) %*% pca_louis$pca$rotation 
+
+plot_cryo <- mat_withinfo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = new_coords[,1],
+         PC4 = new_coords[,4],
+         group = tolower(GROUP))
+plot_cryo$group[which(plot_cryo$group != "non_tolerant")] <- "tolerant"
+plot_cryo$group <- as.factor(plot_cryo$group)
+plot_cryo <- plot_cryo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, group, age_recip, CMVStatus,
+                PC1, PC4)
+
+plot_louis <- pca_louis$pca_2plot %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, group, age_recip, CMVStatus,
+                PC1, PC4) 
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo)))) 
+
+ggplot(all_2plot, aes(x= PC1, y= PC4, col= group, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("red", "blue")) +
+  theme_minimal() +
+  ggtitle("Separation of tolerant vs non tolerant recipients")
+```
+
+Visualise PC2 and PC3 as well
+```{r}
+plot_cryo <- mat_withinfo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC2 = new_coords[,2],
+         PC3 = new_coords[,3],
+         group = tolower(GROUP))
+plot_cryo$group[which(plot_cryo$group != "non_tolerant")] <- "tolerant"
+plot_cryo$group <- as.factor(plot_cryo$group)
+plot_cryo <- plot_cryo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, group, age_recip, CMVStatus,
+                PC2, PC3)
+
+plot_louis <- pca_louis$pca_2plot %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, group, age_recip, CMVStatus,
+                PC2, PC3) 
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo)))) 
+
+ggplot(all_2plot, aes(x= PC2, y= PC3, col= group, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("red", "blue")) +
+  theme_minimal() +
+  ggtitle("Separation of tolerant vs non tolerant recipients")
+```
+
+
+(Answer to reviewers): Check not only whether cGvHD and PC1/PC4 are correlated,
+but also if PC1/PC4 are correlated with cGvHD severity.
+```{r load_data}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+info_louis <- samp_rd %>% 
+  select(Id.Cryostem.R, cGVHD_gradingmax) %>% 
+  column_to_rownames("Id.Cryostem.R")
+info_louis <- info_louis[all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "St_Louis")],]
+names(info_louis) <- all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "St_Louis")]
+info_cryo <- couple_info[all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "Cryostem")],"cGVHD_gradingmax"]
+names(info_cryo) <- all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "Cryostem")]
+
+names_2cohorts <- c(names(info_louis), names(info_cryo))
+if(all(names_2cohorts == all_2plot$Id.Cryostem.R)){
+  all_2plot$cGVHD_gradingmax <- c(info_louis, info_cryo)
+}
+
+all_2plot$cGVHD_gradingmax[which(all_2plot$cGVHD_gradingmax == "Limited")] <- "mild"
+all_2plot$cGVHD_gradingmax[which(all_2plot$cGVHD_gradingmax == "moderate")] <- "severe"
+all_2plot$cGVHD_gradingmax[which(all_2plot$cGVHD_gradingmax == "Extensive")] <- "severe"
+
+patients_with_info <- which(!is.na(all_2plot$cGVHD_gradingmax))
+plot(all_2plot[patients_with_info,"PC1"], 
+    as.numeric(as.factor(all_2plot[patients_with_info,"cGVHD_gradingmax"])),
+    xlab = "PC1 coordinates of patients with cGvHD", ylab = "cGvHD severity (1: mild, 2: severe)",
+    main = paste0("Correlation between PC1 and cGvHD severity = ", 
+                  cor(all_2plot[patients_with_info,"PC1"], 
+    as.numeric(as.factor(all_2plot[patients_with_info,"cGVHD_gradingmax"])))))
+```
+
+
+
+
+
+Test: tSNE on all patients (Louis+Cryostem), since it is not possible to compute
+a tSNE transformation on St Louis alone and then use it to reduce dimensions of
+the Cryostem patients
+```{r}
+mat4tsne_louis <- readRDS(file ="../data/integ/mat4_pca_integ_louis.RDS")
+mat4tsne_cryo <- cryo_tmp
+rownames(mat4tsne_cryo) <- rownames(mat4pca)
+
+# merge data from both cohorts and compute tSNE
+mat4tsne_all <- rbind(mat4tsne_louis, mat4tsne_cryo)
+tSNE_all <- Rtsne::Rtsne(mat4tsne_all, perplexity = 10)
+
+# Plot tSNE results
+tSNE_2plot <- as.data.frame(tSNE_all$Y) %>% 
+  mutate(Id.Cryostem.R = rownames(mat4tsne_all)) %>% 
+  left_join(all_2plot, by = "Id.Cryostem.R")
+ggplot(tSNE_2plot, aes(x= V1, y= V2, col= group, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("red", "blue")) +
+  theme_minimal() +
+  ggtitle("tSNE of integrated features on both cohorts")
+```
+
+Correlation between PCA/tSNE axes and tolerance
+```{r}
+tsne_louis <- tSNE_2plot %>% filter(cohort == "St_Louis")
+print("Correlations of tSNE axes in the St Louis cohort")
+cor(tsne_louis$V1, as.numeric(as.factor(tsne_louis$group)))
+cor(tsne_louis$V2, as.numeric(as.factor(tsne_louis$group)))
+
+print("Correlations of PCA axes in the St Louis cohort")
+cor(tsne_louis$PC1, as.numeric(as.factor(tsne_louis$group)))
+cor(tsne_louis$PC4, as.numeric(as.factor(tsne_louis$group)))
+```
+
+
+Color by ABO.incompatibility
+```{r}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+samp_rd_louis <- samp_rd %>% 
+  dplyr::select("Id.Cryostem.R", "ABO.incompatibility") %>% 
+  dplyr::filter(Id.Cryostem.R %in% all_2plot$Id.Cryostem.R) %>% 
+  column_to_rownames("Id.Cryostem.R")
+ABO_louis <- samp_rd_louis[all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "St_Louis")],]
+
+
+samp_rd_cryo <- couple_info %>% 
+  dplyr::select("CyTOF.Name", "ABO.compatibility") %>% 
+  dplyr::filter(CyTOF.Name %in% all_2plot$Id.Cryostem.R) %>% 
+  column_to_rownames("CyTOF.Name")
+ABO_cryo <- samp_rd_cryo[all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "Cryostem")],]
+
+all_2plot$ABO.compatibility <- as.factor(c(ABO_louis, ABO_cryo))
+
+ggplot(all_2plot, aes(x= PC1, y= PC4, col= ABO.compatibility, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("deepskyblue", "firebrick", "lightcoral")) +
+  theme_minimal() +
+  ggtitle("Separation of recipients based on ABO compatibility")
+```
+
+
+<!-- #### Separate data type analyses -->
+
+<!-- For comparison, we can see if we would have managed to separate the tolerant  -->
+<!-- from non tolerant recipients as well without integrating the data: -->
+
+<!-- #### CyTOF: -->
+
+<!-- We apply PCA only on the 24 CyTOF features: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- cyt4pca <- ft_recip_cyto %>%  -->
+<!--   rownames_to_column("Id.Cryostem.R") %>%  -->
+<!--   dplyr::filter(Id.Cryostem.R %in% ft_integ$Id.Cryostem.R) %>%  -->
+<!--   column_to_rownames("Id.Cryostem.R") -->
+<!-- pca_cyto <- ade4::dudi.pca(cyt4pca, nf = 10, scannf = F) -->
+<!-- ``` -->
+
+<!-- Variability captured by each component: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- plot(pca_cyto$eig, pch = 19) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- info_tmp <- couple_info %>%  -->
+<!--   rownames_to_column("rn") %>%  -->
+<!--   dplyr::filter(CyTOF.Name %in% rownames(cyt4pca)) %>% -->
+<!--   mutate(group = as.character(tolower(GROUP))) %>%  -->
+<!--   column_to_rownames("CyTOF.Name") -->
+<!-- info_tmp <- info_tmp[rownames(cyt4pca),] -->
+<!-- info_tmp$group[which(info_tmp$group != "non_tolerant")] <- "tolerant" -->
+<!-- info_tmp$group <- as.factor(info_tmp$group) -->
+<!-- ``` -->
+
+<!-- We can see how these principal components are correlated with tolerance.  -->
+<!-- The first PC is very correlated with the tolerance. The PC3 is the 2nd mostly -->
+<!-- correlated with tolerance. -->
+<!-- ```{r, echo = FALSE} -->
+<!-- barplot(abs(cor(pca_cyto$li[,1:10], as.numeric(info_tmp$group))[,1])) -->
+<!-- ``` -->
+
+<!-- The non tolerant recipients are as badly separated from the tolerant  -->
+<!-- recipients as in the integrative PCA.  -->
+<!-- ```{r, echo = FALSE} -->
+<!-- #information on the patients:  -->
+<!-- info_pca <- info_complete_patients %>% column_to_rownames("CyTOF.Name") -->
+<!-- info_pca <- info_pca[rownames(cyt4pca),] -->
+<!-- ade4::s.class(pca_cyto$li[,c(1,3)], info_pca$group, col=c("red", "blue")) -->
+<!-- # ade4::s.class(pca_cyto$li[,c(1,6)], as.factor(info_pca$cGVHD),  -->
+<!-- #               col = c("black", "red", "lightgreen", "green3")) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- keep1 <- order(abs(pca_cyto$c1$CS1), decreasing = T)[1:20] -->
+<!-- # keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5] -->
+<!-- # tokeep <- unique(c(keep1, keep2)) -->
+<!-- tokeep <- keep1 -->
+<!-- ade4::s.arrow(pca_cyto$c1[tokeep,], boxes = F, clabel = 0.5) -->
+<!-- ``` -->
+
+<!-- We can try to build a model that would predict a patients output (tolerant or not) -->
+<!-- based on the PCs: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- data2model <- as.data.frame(pca_cyto$li) %>% mutate(group = info_pca$group) -->
+
+<!-- set.seed(1)  -->
+
+<!-- # Define training control -->
+<!-- train.control <- caret::trainControl(method = "cv", number = 5) -->
+<!-- # Train the model -->
+
+<!-- model <- caret::train(group ~., data = data2model, method = "svmLinearWeights2", -->
+<!--                trControl = train.control) -->
+<!-- # Summarize the results -->
+<!-- print(model) -->
+<!-- ``` -->
+
+
+<!-- To see if the features that we selected can help us to clssify the patients, we -->
+<!-- can also apply a 5 fold cross validation setting on the CyTOF features of the  -->
+<!-- same 39 patients. -->
+
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- info_rf <- info_complete_patients %>% column_to_rownames("Id.Cryostem.R") -->
+<!-- info_rf <- info_rf[rownames(cyt4pca),] -->
+<!-- cyt4rf <- cbind(info_rf$group, cyt4pca) -->
+<!-- colnames(cyt4rf)[1] <- "group" -->
+
+<!-- cv_id <- list(c(1:5), c(6:10), c(11:15), c(16:20), c(21:23)) -->
+<!-- cv_accuracies <- lapply(seq_along(cv_id), function(idx){ -->
+<!--   train_set <- cyt4rf[-cv_id[[idx]], ] -->
+<!--   test_set <- cyt4rf[cv_id[[idx]], -1] -->
+<!--   true_labels <- cyt4rf[cv_id[[idx]], "group"] -->
+<!--   rf <- ranger::ranger(group~., train_set, num.trees = 5000, -->
+<!--                            importance = "impurity") -->
+<!--   pred <- predict(rf, test_set) -->
+<!--   acc <- ( length(which(pred$predictions == true_labels))/length(true_labels) ) -->
+<!-- }) -->
+
+<!-- accuracy <- mean(unlist(cv_accuracies)) -->
+<!-- accuracy -->
+<!-- ``` -->
+
+<!-- #### Metabolomics: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- met4pca <- ft_recip_metabo %>%  -->
+<!--   rownames_to_column("CyTOF.Name") %>%  -->
+<!--   dplyr::filter(CyTOF.Name %in% ft_integ$Id.Cryostem.R) %>%  -->
+<!--   column_to_rownames("CyTOF.Name") -->
+<!-- pca_metabo <- ade4::dudi.pca(met4pca, nf = 10, scannf = F) -->
+<!-- ``` -->
+
+<!-- Variability captured by each component: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- plot(pca_metabo$eig, pch = 19) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- info_tmp <- couple_info %>%  -->
+<!--   rownames_to_column("rn") %>%  -->
+<!--   dplyr::filter(CyTOF.Name %in% rownames(met4pca)) %>% -->
+<!--   mutate(group = as.character(tolower(GROUP))) %>%  -->
+<!--   column_to_rownames("CyTOF.Name") -->
+<!-- info_tmp <- info_tmp[rownames(met4pca),] -->
+<!-- info_tmp$group[which(info_tmp$group != "non_tolerant")] <- "tolerant" -->
+<!-- info_tmp$group <- as.factor(info_tmp$group) -->
+<!-- ``` -->
+
+<!-- We can see how these principal components are correlated with tolerance.  -->
+<!-- The first PC is very correlated with the tolerance. The PC2 is the 2nd mostly -->
+<!-- correlated with tolerance. -->
+<!-- ```{r, echo = FALSE} -->
+<!-- barplot(abs(cor(pca_metabo$li[,1:10], as.numeric(info_tmp$group))[,1])) -->
+<!-- ``` -->
+
+<!-- The non tolerant recipients are slightly better separated from the tolerant  -->
+<!-- recipients than in the integrative PCA.  -->
+<!-- ```{r, echo = FALSE} -->
+<!-- #information on the patients:  -->
+<!-- info_pca <- info_complete_patients %>% column_to_rownames("CyTOF.Name") -->
+<!-- info_pca <- info_pca[rownames(met4pca),] -->
+<!-- ade4::s.class(pca_metabo$li[,c(1,2)], info_pca$group, col=c("red", "blue")) -->
+<!-- # ade4::s.class(pca_cyto$li[,c(1,6)], as.factor(info_pca$cGVHD),  -->
+<!-- #               col = c("black", "red", "lightgreen", "green3")) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- keep1 <- order(abs(pca_metabo$c1$CS1), decreasing = T)[1:20] -->
+<!-- # keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5] -->
+<!-- # tokeep <- unique(c(keep1, keep2)) -->
+<!-- tokeep <- keep1 -->
+<!-- ade4::s.arrow(pca_metabo$c1[tokeep,], boxes = F, clabel = 0.5) -->
+<!-- ``` -->
+
+<!-- We can try to build a model that would predict a patients output (tolerant or not) -->
+<!-- based on the PCs: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- data2model <- as.data.frame(pca_metabo$li) %>% mutate(group = info_pca$group) -->
+
+<!-- set.seed(1)  -->
+
+<!-- # Define training control -->
+<!-- train.control <- caret::trainControl(method = "cv", number = 5) -->
+<!-- # Train the model -->
+
+<!-- model <- caret::train(group ~., data = data2model, method = "svmLinearWeights2", -->
+<!--                trControl = train.control) -->
+<!-- # Summarize the results -->
+<!-- print(model) -->
+<!-- ``` -->
+
+<!-- To see if the features that we selected can help us to clssify the patients, we -->
+<!-- can also apply a 5 fold cross validation setting on the CyTOF features of the  -->
+<!-- same 39 patients. -->
+
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- info_rf <- info_complete_patients %>% column_to_rownames("Id.Cryostem.R") -->
+<!-- info_rf <- info_rf[rownames(met4pca),] -->
+<!-- met4rf <- cbind(info_rf$group, met4pca) -->
+<!-- colnames(met4rf)[1] <- "group" -->
+
+<!-- cv_id <- list(c(1:5), c(6:10), c(11:15), c(16:20), c(21:23)) -->
+<!-- cv_accuracies <- lapply(seq_along(cv_id), function(idx){ -->
+<!--   train_set <- met4rf[-cv_id[[idx]], ] -->
+<!--   test_set <- met4rf[cv_id[[idx]], -1] -->
+<!--   true_labels <- met4rf[cv_id[[idx]], "group"] -->
+<!--   rf <- ranger::ranger(group~., train_set, num.trees = 5000, -->
+<!--                            importance = "impurity") -->
+<!--   pred <- predict(rf, test_set) -->
+<!--   acc <- ( length(which(pred$predictions == true_labels))/length(true_labels) ) -->
+<!-- }) -->
+
+<!-- accuracy <- mean(unlist(cv_accuracies)) -->
+<!-- accuracy -->
+<!-- ``` -->
+
+<!-- #### Transcriptomics: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- rna4pca <- ft_recip_transcripto %>%  -->
+<!--   rownames_to_column("Id.Cryostem.R") %>%  -->
+<!--   dplyr::filter(Id.Cryostem.R %in% ft_integ$Id.Cryostem.R) %>%  -->
+<!--   column_to_rownames("Id.Cryostem.R") -->
+<!-- pca_transcripto <- ade4::dudi.pca(rna4pca, nf = 10, scannf = F) -->
+<!-- ``` -->
+
+<!-- Variability captured by each component: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- plot(pca_transcripto$eig, pch = 19) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- info_tmp <- couple_info %>%  -->
+<!--   rownames_to_column("rn") %>%  -->
+<!--   dplyr::filter(CyTOF.Name %in% rownames(rna4pca)) %>% -->
+<!--   mutate(group = as.character(tolower(GROUP))) %>%  -->
+<!--   column_to_rownames("CyTOF.Name") -->
+<!-- info_tmp <- info_tmp[rownames(rna4pca),] -->
+<!-- info_tmp$group[which(info_tmp$group != "non_tolerant")] <- "tolerant" -->
+<!-- info_tmp$group <- as.factor(info_tmp$group) -->
+<!-- ``` -->
+
+<!-- We can see how these principal components are correlated with tolerance.  -->
+<!-- The first PC is very correlated with the tolerance. The PC9 is the 2nd mostly -->
+<!-- correlated with tolerance. -->
+<!-- ```{r, echo = FALSE} -->
+<!-- barplot(abs(cor(pca_transcripto$li[,1:10], as.numeric(info_tmp$group))[,1])) -->
+<!-- ``` -->
+
+<!-- The non tolerant recipients are slightly better separated from the tolerant  -->
+<!-- recipients than in the integrative PCA.  -->
+<!-- ```{r, echo = FALSE} -->
+<!-- #information on the patients:  -->
+<!-- info_pca <- info_complete_patients %>% column_to_rownames("CyTOF.Name") -->
+<!-- info_pca <- info_pca[rownames(rna4pca),] -->
+<!-- ade4::s.class(pca_transcripto$li[,c(1,9)], info_pca$group, col=c("red", "blue")) -->
+<!-- # ade4::s.class(pca_cyto$li[,c(1,6)], as.factor(info_pca$cGVHD),  -->
+<!-- #               col = c("black", "red", "lightgreen", "green3")) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- keep1 <- order(abs(pca_transcripto$c1$CS1), decreasing = T)[1:20] -->
+<!-- # keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5] -->
+<!-- # tokeep <- unique(c(keep1, keep2)) -->
+<!-- tokeep <- keep1 -->
+<!-- ade4::s.arrow(pca_transcripto$c1[tokeep,], boxes = F, clabel = 0.5) -->
+<!-- ``` -->
+
+<!-- We can try to build a model that would predict a patients output (tolerant or not) -->
+<!-- based on the PCs: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- data2model <- as.data.frame(pca_transcripto$li) %>% mutate(group = info_pca$group) -->
+
+<!-- set.seed(1)  -->
+
+<!-- # Define training control -->
+<!-- train.control <- caret::trainControl(method = "cv", number = 5) -->
+<!-- # Train the model -->
+
+<!-- model <- caret::train(group ~., data = data2model, method = "svmLinearWeights2", -->
+<!--                trControl = train.control) -->
+<!-- # Summarize the results -->
+<!-- print(model) -->
+<!-- ``` -->
+
+<!-- To see if the features that we selected can help us to clssify the patients, we -->
+<!-- can also apply a 5 fold cross validation setting on the CyTOF features of the  -->
+<!-- same 23 patients. -->
+
+<!-- ```{r} -->
+<!-- set.seed(1) -->
+<!-- info_rf <- info_complete_patients %>% column_to_rownames("Id.Cryostem.R") -->
+<!-- info_rf <- info_rf[rownames(rna4pca),] -->
+<!-- rna4rf <- cbind(info_rf$group, rna4pca) -->
+<!-- colnames(rna4rf)[1] <- "group" -->
+
+<!-- cv_id <- list(c(1:5), c(6:10), c(11:15), c(16:20), c(21:23)) -->
+<!-- cv_accuracies <- lapply(seq_along(cv_id), function(idx){ -->
+<!--   train_set <- rna4rf[-cv_id[[idx]], ] -->
+<!--   test_set <- rna4rf[cv_id[[idx]], -1] -->
+<!--   true_labels <- rna4rf[cv_id[[idx]], "group"] -->
+<!--   rf <- ranger::ranger(group~., train_set, num.trees = 5000, -->
+<!--                            importance = "impurity") -->
+<!--   pred <- predict(rf, test_set) -->
+<!--   acc <- ( length(which(pred$predictions == true_labels))/length(true_labels) ) -->
+<!-- }) -->
+
+<!-- accuracy <- mean(unlist(cv_accuracies)) -->
+<!-- accuracy -->
+<!-- ``` -->
+
+<!-- #### Mapping cryostem recipients in the St Louis PCA: -->
+
+<!-- Since the recipients were nicely separated in the PCA of the St Louis cohort,  -->
+<!-- wa can apply the same transformation to the cryostem patients to see how they -->
+<!-- map there. -->
+<!-- ```{r} -->
+<!-- pca_louis <- readRDS("../data/integ/pca_TNT_st_louis_recip.RDS") -->
+
+<!-- ggplot(pca_louis$pca_2plot, aes(x= PC1, y= PC4, col= group, label = Id.Cryostem.R)) +  -->
+<!--   geom_point(shape = 17) + -->
+<!--   geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) + -->
+<!--   ggtitle("Separation of tolerant vs non tolerant recipients") -->
+<!-- ``` -->
+
+<!-- Cryostem patients in the dimensions of the St Louis PCA: -->
+<!-- ```{r} -->
+<!-- pca_cryo <- predict(pca_louis$pca, mat4pca) -->
+<!-- info_tmp <- info_pca[rownames(mat4pca),] -->
+<!-- mat2plot <- info_tmp %>%  -->
+<!--   mutate(PC1 = pca_cryo[,1], -->
+<!--          PC2 = pca_cryo[,2], -->
+<!--          PC3 = pca_cryo[,3], -->
+<!--          PC4 = pca_cryo[,4]) -->
+<!-- ggplot(mat2plot, aes(x= PC1, y= PC4, col= group, label = Id.Cryostem.R)) +  -->
+<!--   geom_point() + -->
+<!--   geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) + -->
+<!--   ggtitle("Separation of tolerant vs non tolerant recipients") -->
+<!-- ``` -->
+
+<!-- We can then try to map both ST Louis and Cryostem patients on the same plot: -->
+<!-- ```{r} -->
+<!-- big_mat2plot <- rbind(mat2plot[,c("PC1", "PC4", "group", "Id.Cryostem.R")], -->
+<!--                       pca_louis$pca_2plot[,c("PC1", "PC4", "group", "Id.Cryostem.R")]) %>%  -->
+<!--   mutate(cohort = c(rep("cryostem", nrow(mat2plot)), -->
+<!--                     rep("st_louis", nrow(pca_louis$pca_2plot)))) -->
+<!-- ggplot(big_mat2plot, aes(x= PC1, y= PC4, col= group, label = Id.Cryostem.R, shape = cohort)) +  -->
+<!--   geom_point(aes(shape=cohort, color=group, size=cohort)) + -->
+<!--   geom_text(aes(label=Id.Cryostem.R),hjust=0, vjust=0) + -->
+<!--   ggtitle("Separation of tolerant vs non tolerant recipients in the St Louis and the cryostem cohort") -->
+<!-- ``` -->
+
+
+### Primary versus secondary tolerant recipients
+
+We now focus on the features that seemed to play a role when trying to 
+disinguish primary from secondary tolerant recipients.
+
+We first need to gather the features that were extracted from the three data
+sources:
+
+- CyTOF features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+tmp <- readRDS("../data/cyto_national/log2/recip/pctgs_sel_ft_recip_PTST_90.RDS")
+sel_beh <- read.xlsx("../data/cyto_national/log2/recip/perm_val_beh_PTST_90_thresh.xlsx")
+
+ft_recip_cyto <- tmp %>% 
+  dplyr::select(sel_beh$features) 
+```
+
+- Metabolomics features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+tmp <- readRDS("../data/metabo_national/v2_012020/recip/pctgs_sel_ft_recip_PTST_90.RDS")
+sel_beh <- read.xlsx("../data/metabo_national/v2_012020/recip/perm_val_beh_PTST_90_thresh.xlsx")
+
+ft_recip_metabo <- tmp %>% 
+  dplyr::select(sel_beh$features) 
+```
+
+- Transcriptomics features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+load("../data/RNA_seq_national/recip_only/rna_recip_cryo_PS_90.RData")
+sel_beh <- read.xlsx("../data/RNAseq/recip_only/perm_val_beh_PS_90_thresh.xlsx")
+
+ft_recip_transcripto <- rna_recip_cryo_PS_90 %>% 
+  dplyr::select(sel_beh$sel_beh) 
+```
+
+I extract informations on the recipients group, age, gender, ... to be able to 
+use this information later on.
+
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+samp_rd <- samp_rd %>% 
+  dplyr::filter(!is.na(METABONAME)) %>%  
+  dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+head(couple_info[,c(5, 11,15, 56:59)])
+```
+
+I add a prefix ("cyt_", "rna_" or "met_") in front of the features names, and 
+I then merge all features together:
+
+```{r, echo = FALSE}
+colnames(ft_recip_cyto) <- paste0("cyt_", colnames(ft_recip_cyto))
+colnames(ft_recip_metabo) <- paste0("met_", colnames(ft_recip_metabo))
+
+# I change the rownames in the metabo file so that they correspond to cryostem Ids
+metabo_names <- rownames(ft_recip_metabo)
+metabo_names2 <- gsub("_", " ", metabo_names)
+info_tmp <- couple_info %>% 
+  rownames_to_column("rn") %>% 
+  column_to_rownames("METABONAME")
+info_tmp2 <- info_tmp[metabo_names2,]
+rownames(ft_recip_metabo) <- info_tmp2$CyTOF.Name
+
+colnames(ft_recip_transcripto) <- paste0("rna_", colnames(ft_recip_transcripto))
+
+ft_integ <- ft_recip_cyto %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  inner_join(ft_recip_metabo %>% rownames_to_column("Id.Cryostem.R") , by = c("Id.Cryostem.R")) %>% 
+  inner_join(ft_recip_transcripto %>% rownames_to_column("Id.Cryostem.R") , by = c("Id.Cryostem.R")) 
+print(paste0("We have information on the CyTOF, metabolomics and transcriptomics data for ",
+             nrow(ft_integ), " patients in the St Louis cohort."))
+
+saveRDS(ft_integ, file = "../data/integ_national/cyt_met_rna_beh_PTST_features.RDS")
+```
+
+#### Volcano plot analysis
+
+We can do a volcano plot on the CyTOF features  metabolites and genes of the non
+versus tolerant recipients:
+```{r, echo = FALSE}
+complete_patients <- ft_integ$Id.Cryostem.R
+info_complete_patients <- couple_info %>%
+  rownames_to_column("metaboname") %>% 
+  dplyr::filter(CyTOF.Name %in% complete_patients) %>% 
+  arrange(CyTOF.Name) %>% 
+  mutate(group = as.character(group),
+         Id.Cryostem.R = CyTOF.Name)
+info_complete_patients$group <- as.factor(info_complete_patients$group)
+
+mat4volcano <- ft_integ %>% 
+  column_to_rownames("Id.Cryostem.R")
+info_tmp <- info_complete_patients %>% 
+  column_to_rownames("Id.Cryostem.R")
+info_tmp <- info_tmp[rownames(mat4volcano),]
+mat4volcano <- mat4volcano %>% 
+  rownames_to_column("rn") %>% 
+  mutate(group = info_tmp$group) %>% 
+  dplyr::select(group, everything()) %>% 
+  column_to_rownames("rn")
+```
+
+```{r, echo = FALSE}
+res <- metabolomics::TwoGroup(mat4volcano)
+# pdf("~/Desktop/volcanoplot.pdf", width = 24, height = 20)
+metabolomics::VolcanoPlot(res$output[,4], res$output[,2], cexlab = 0.6)
+# dev.off()
+
+# metabolomics::MetBoxPlots(mat4volcano, "rna_EIF2S3B",cols = c("red", "blue"),main = "rna_EIF2S3B")
+# metabolomics::MetBoxPlots(mat4volcano, "cyt_X.CD38._23_DN..86.....CD8low..13...TSCM.like",cols = c("red", "blue"),main = "cyt_X.CD38._23_DN..86.....CD8low..13...TSCM.like")
+# metabolomics::MetBoxPlots(mat4volcano, "rna_ENSG00000218713",cols = c("red", "blue"),main = "rna_ENSG00000218713")
+```
+
+<!-- #### Correlation analysis -->
+
+<!-- ```{r} -->
+<!-- #pdf("~/Desktop/correlationplot_integration_recip_TNT.pdf", width = 16, height = 16) -->
+<!-- gr <- plot_correlations(mat4volcano, compar = "PS") -->
+<!-- #dev.off() -->
+
+<!-- ``` -->
+
+#### Principal component analysis
+
+In the St Louis cohort, we were able to identify a nice separation between 
+primary tolerant and secondary tolerant recipients when integrating the 
+features that we found of interest in the CyTOF, metabolomics and transcriptomics data.
+
+To see if these observations can be confirmed, we will now map the recipients
+of the Cryostem cohort in the PCA space that was defined by the recipients of 
+the St Louis cohort.
+```{r, echo = FALSE}
+mat4pca <- ft_integ %>% 
+  dplyr::select(-Id.Cryostem.R) %>%  
+  apply(2, scale) %>% 
+  as.matrix() 
+rownames(mat4pca) <- ft_integ$Id.Cryostem.R
+
+mat_withinfo <- left_join(ft_integ, 
+                          couple_info %>% mutate(Id.Cryostem.R = CyTOF.Name), 
+                          by = "Id.Cryostem.R")
+
+pca_louis <- readRDS("../data/integ/pca_PTST_st_louis_recip.RDS")
+
+cryo_tmp <- apply(mat4pca, 2, scale)
+new_coords <- scale(cryo_tmp, pca_louis$pca$center, pca_louis$pca$scale) %*% pca_louis$pca$rotation 
+
+plot_cryo <- mat_withinfo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2],
+         group = tolower(GROUP))
+plot_cryo$group <- as.factor(plot_cryo$group)
+plot_cryo <- plot_cryo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, group, age_recip, CMVStatus,
+                PC1, PC2)
+
+plot_louis <- pca_louis$pca_2plot %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, group, age_recip, CMVStatus,
+                PC1, PC2) 
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo)))) 
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= group, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("green", "blue")) +
+  theme_minimal() +
+  ggtitle("Separation of primary tolerant vs secondary tolerant recipients")
+```
+
+(Answer to reviewers): Check not only whether cGvHD and PC1/PC2 are correlated,
+but also if PC1/PC2 are correlated with cGvHD severity.
+```{r load_data}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/Local_cohort/Data synthesis local cohort Saint-Louis 17012019.xlsx")
+info_louis <- samp_rd %>% 
+  select(Id.Cryostem.R, cGVHD_gradingmax, cGVHD) %>% 
+  column_to_rownames("Id.Cryostem.R")
+info_louis <- info_louis[all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "St_Louis")],]
+info_louis <- info_louis$cGVHD_gradingmax
+names(info_louis) <- all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "St_Louis")]
+info_cryo <- couple_info[all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "Cryostem")],
+                         c("cGVHD_gradingmax", "cGVHD")]
+names(info_cryo) <- all_2plot$Id.Cryostem.R[which(all_2plot$cohort == "Cryostem")]
+
+names_2cohorts <- c(names(info_louis), names(info_cryo))
+if(all(names_2cohorts == all_2plot$Id.Cryostem.R)){
+  all_2plot$cGVHD_gradingmax <- c(info_louis, info_cryo)
+}
+
+all_2plot$cGVHD_gradingmax[which(all_2plot$cGVHD_gradingmax == "Limited")] <- "mild"
+all_2plot$cGVHD_gradingmax[which(all_2plot$cGVHD_gradingmax == "moderate")] <- "severe"
+all_2plot$cGVHD_gradingmax[which(all_2plot$cGVHD_gradingmax == "Extensive")] <- "severe"
+all_2plot$cGVHD_gradingmax[which(all_2plot$cGVHD_gradingmax == "")] <- NA
+
+patients_with_info <- which(!is.na(all_2plot$cGVHD_gradingmax))
+plot(all_2plot[patients_with_info,"PC1"], 
+    as.numeric(as.factor(all_2plot[patients_with_info,"cGVHD_gradingmax"])),
+    xlab = "PC1 coordinates of patients with cGvHD", ylab = "cGvHD severity (1: mild, 2: severe)",
+    main = paste0("Correlation between PC1 and cGvHD severity = ", 
+                  cor(all_2plot[patients_with_info,"PC1"], 
+    as.numeric(as.factor(all_2plot[patients_with_info,"cGVHD_gradingmax"])))))
+
+plot(all_2plot[patients_with_info,"PC2"], 
+    as.numeric(as.factor(all_2plot[patients_with_info,"cGVHD_gradingmax"])),
+    xlab = "PC2 coordinates of patients with cGvHD", ylab = "cGvHD severity (1: mild, 2: severe)",
+    main = paste0("Correlation between PC2 and cGvHD severity = ", 
+                  cor(all_2plot[patients_with_info,"PC2"], 
+    as.numeric(as.factor(all_2plot[patients_with_info,"cGVHD_gradingmax"])))))
+```
+
+
+<!-- #### Separate data type analyses -->
+
+<!-- For comparison, we can see if we would have managed to separate the tolerant  -->
+<!-- from non tolerant recipients as well without integrating the data: -->
+
+<!-- #### CyTOF: -->
+
+<!-- We apply PCA only on the 24 CyTOF features: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- cyt4pca <- ft_recip_cyto %>%  -->
+<!--   rownames_to_column("Id.Cryostem.R") %>%  -->
+<!--   dplyr::filter(Id.Cryostem.R %in% ft_integ$Id.Cryostem.R) %>%  -->
+<!--   column_to_rownames("Id.Cryostem.R") -->
+<!-- pca_cyto <- ade4::dudi.pca(cyt4pca, nf = 10, scannf = F) -->
+<!-- ``` -->
+
+<!-- Variability captured by each component: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- plot(pca_cyto$eig, pch = 19) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- info_tmp <- couple_info %>%  -->
+<!--   rownames_to_column("rn") %>%  -->
+<!--   dplyr::filter(CyTOF.Name %in% rownames(cyt4pca)) %>% -->
+<!--   mutate(group = as.character(tolower(GROUP))) %>%  -->
+<!--   column_to_rownames("CyTOF.Name") -->
+<!-- info_tmp <- info_tmp[rownames(cyt4pca),] -->
+<!-- info_tmp$group <- as.factor(info_tmp$group) -->
+<!-- ``` -->
+
+<!-- Since we have only two CyTOF features, the separation is not that good: -->
+
+<!-- The secondary tolerant recipients are badly separated from the primary tolerant  -->
+<!-- recipients compared to the integrative PCA.  -->
+<!-- ```{r, echo = FALSE} -->
+<!-- #information on the patients:  -->
+<!-- info_pca <- info_complete_patients %>% column_to_rownames("CyTOF.Name") -->
+<!-- info_pca <- info_pca[rownames(cyt4pca),] -->
+<!-- ade4::s.class(pca_cyto$li[,c(1,2)], info_pca$group, col=c("green", "blue")) -->
+<!-- # ade4::s.class(pca_cyto$li[,c(1,6)], as.factor(info_pca$cGVHD),  -->
+<!-- #               col = c("black", "red", "lightgreen", "green3")) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- keep1 <- order(abs(pca_cyto$c1$CS1), decreasing = T)[1:2] -->
+<!-- # keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5] -->
+<!-- # tokeep <- unique(c(keep1, keep2)) -->
+<!-- tokeep <- keep1 -->
+<!-- ade4::s.arrow(pca_cyto$c1[tokeep,], boxes = F, clabel = 0.5) -->
+<!-- ``` -->
+
+<!-- #### Metabolomics: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- met4pca <- ft_recip_metabo %>%  -->
+<!--   rownames_to_column("CyTOF.Name") %>%  -->
+<!--   dplyr::filter(CyTOF.Name %in% ft_integ$Id.Cryostem.R) %>%  -->
+<!--   column_to_rownames("CyTOF.Name") -->
+<!-- pca_metabo <- ade4::dudi.pca(met4pca, nf = 10, scannf = F) -->
+<!-- ``` -->
+
+<!-- Variability captured by each component: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- plot(pca_metabo$eig, pch = 19) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- info_tmp <- couple_info %>%  -->
+<!--   rownames_to_column("rn") %>%  -->
+<!--   dplyr::filter(CyTOF.Name %in% rownames(met4pca)) %>% -->
+<!--   mutate(group = as.character(tolower(GROUP))) %>%  -->
+<!--   column_to_rownames("CyTOF.Name") -->
+<!-- info_tmp <- info_tmp[rownames(met4pca),] -->
+<!-- info_tmp$group[which(info_tmp$group != "non_tolerant")] <- "tolerant" -->
+<!-- info_tmp$group <- as.factor(info_tmp$group) -->
+<!-- ``` -->
+
+
+<!-- The non tolerant recipients are slightly better separated from the tolerant  -->
+<!-- recipients than in the integrative PCA.  -->
+<!-- ```{r, echo = FALSE} -->
+<!-- #information on the patients:  -->
+<!-- info_pca <- info_complete_patients %>% column_to_rownames("CyTOF.Name") -->
+<!-- info_pca <- info_pca[rownames(met4pca),] -->
+<!-- ade4::s.class(pca_metabo$li[,c(1,2)], info_pca$group, col=c("green", "blue")) -->
+<!-- # ade4::s.class(pca_cyto$li[,c(1,6)], as.factor(info_pca$cGVHD),  -->
+<!-- #               col = c("black", "red", "lightgreen", "green3")) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- keep1 <- order(abs(pca_metabo$c1$CS1), decreasing = T)[1:2] -->
+<!-- # keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5] -->
+<!-- # tokeep <- unique(c(keep1, keep2)) -->
+<!-- tokeep <- keep1 -->
+<!-- ade4::s.arrow(pca_metabo$c1[tokeep,], boxes = F, clabel = 0.5) -->
+<!-- ``` -->
+
+<!-- #### Transcriptomics: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- rna4pca <- ft_recip_transcripto %>%  -->
+<!--   rownames_to_column("Id.Cryostem.R") %>%  -->
+<!--   dplyr::filter(Id.Cryostem.R %in% ft_integ$Id.Cryostem.R) %>%  -->
+<!--   column_to_rownames("Id.Cryostem.R") -->
+<!-- pca_transcripto <- ade4::dudi.pca(rna4pca, nf = 10, scannf = F) -->
+<!-- ``` -->
+
+<!-- Variability captured by each component: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- plot(pca_transcripto$eig, pch = 19) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- info_tmp <- couple_info %>%  -->
+<!--   rownames_to_column("rn") %>%  -->
+<!--   dplyr::filter(CyTOF.Name %in% rownames(rna4pca)) %>% -->
+<!--   mutate(group = as.character(tolower(GROUP))) %>%  -->
+<!--   column_to_rownames("CyTOF.Name") -->
+<!-- info_tmp <- info_tmp[rownames(rna4pca),] -->
+<!-- info_tmp$group <- as.factor(info_tmp$group) -->
+<!-- ``` -->
+
+<!-- We can see how these principal components are correlated with tolerance.  -->
+<!-- The third PC is very correlated with the tolerance. The PC1 is the 2nd mostly -->
+<!-- correlated with tolerance. -->
+<!-- ```{r, echo = FALSE} -->
+<!-- barplot(abs(cor(pca_transcripto$li[,1:10], as.numeric(info_tmp$group))[,1])) -->
+<!-- ``` -->
+
+<!-- The non tolerant recipients are slightly better separated from the tolerant  -->
+<!-- recipients than in the integrative PCA.  -->
+<!-- ```{r, echo = FALSE} -->
+<!-- #information on the patients:  -->
+<!-- info_pca <- info_complete_patients %>% column_to_rownames("CyTOF.Name") -->
+<!-- info_pca <- info_pca[rownames(rna4pca),] -->
+<!-- ade4::s.class(pca_transcripto$li[,c(1,3)], info_pca$group, col=c("green", "blue")) -->
+<!-- # ade4::s.class(pca_cyto$li[,c(1,6)], as.factor(info_pca$cGVHD),  -->
+<!-- #               col = c("black", "red", "lightgreen", "green3")) -->
+<!-- ``` -->
+
+<!-- ```{r, echo = FALSE} -->
+<!-- keep1 <- order(abs(pca_transcripto$c1$CS1), decreasing = T)[1:20] -->
+<!-- # keep2 <- order(abs(pca_cyto$c1$CS2), decreasing = T)[1:5] -->
+<!-- # tokeep <- unique(c(keep1, keep2)) -->
+<!-- tokeep <- keep1 -->
+<!-- ade4::s.arrow(pca_transcripto$c1[tokeep,], boxes = F, clabel = 0.5) -->
+<!-- ``` -->
+
+<!-- We can try to build a model that would predict a patients output (tolerant or not) -->
+<!-- based on the PCs: -->
+<!-- ```{r, echo = FALSE} -->
+<!-- data2model <- as.data.frame(pca_transcripto$li) %>% mutate(group = info_pca$group) -->
+
+<!-- set.seed(1)  -->
+
+<!-- # Define training control -->
+<!-- train.control <- caret::trainControl(method = "cv", number = 5) -->
+<!-- # Train the model -->
+
+<!-- model <- caret::train(group ~., data = data2model, method = "svmLinearWeights2", -->
+<!--                trControl = train.control) -->
+<!-- # Summarize the results -->
+<!-- print(model) -->
+<!-- ``` -->
+
+## Adding informations on donors to the recipients
+
+We can then add the features that we extracted as informative in the 
+donors, to see if, taken together, they would be more informative than 
+when working on the integrated data of recipients alone.
+
+### Tolerant versus non tolerant recipients + donors
+
+Since looking at differences between the three groups consisting of primary, 
+secondary and non tolerant patients at the same time wasn't feasible, we divided
+our problem in two distinct sub-problems. We first focus on the features that
+seemed to play a role when trying to disinguish non tolerant from tolerant 
+recipients and donors.
+
+I extract informations on the recipients group, age, gender, ... to be able to 
+use this information later on.
+
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+# samp_rd <- samp_rd %>% 
+#   dplyr::filter(!is.na(METABONAME)) %>%  
+#   dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+head(couple_info[,c(5, 11,15, 56:59)])
+```
+
+We then need to gather the features that were extracted from the three data
+sources:
+
+- CyTOF features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+tmp_r <- readRDS("../data/cyto_national/log2/recip/pctgs_sel_ft_recip_TNT_90.RDS")
+sel_beh_r <- read.xlsx("../data/cyto_national/log2/recip/perm_val_beh_TNT_90_thresh.xlsx")
+tmp_d <- readRDS("../data/cyto_national/log2/donors/pctgs_sel_ft_donors_TNT_90.RDS") 
+sel_beh_d <- read.xlsx("../data/cyto_national/log2/donors/perm_val_beh_TNT_90_thresh.xlsx")
+
+couple_info_D <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^D", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_R <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^R", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_tmp <- couple_info_D %>% 
+  mutate(recip_names = couple_info_R$Id.Cryostem.R)
+
+tmp_r <- tmp_r %>% 
+  select(sel_beh_r$features) %>% 
+  rownames_to_column("Id.Cryostem.R") 
+
+tmp_d <- tmp_d %>%  
+  rownames_to_column("Id.Cryostem.R") %>% 
+  inner_join(couple_info_tmp, by = "Id.Cryostem.R") %>% 
+  select(recip_names, sel_beh_d$features)
+
+colnames(tmp_d)[1] <- "Id.Cryostem.R"
+
+colnames(tmp_r)[-c(1)] <- paste0("cyt_R_", colnames(tmp_r)[-c(1)])
+colnames(tmp_d)[-c(1)] <- paste0("cyt_D_", colnames(tmp_d)[-c(1)])
+  
+ft_rdr_cyto <- tmp_r %>% 
+  inner_join(tmp_d, by = c("Id.Cryostem.R"))
+
+```
+
+- Metabolomics features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+tmp_r <- readRDS("../data/metabo_national/v2_012020/recip/pctgs_sel_ft_recip_TNT_90.RDS")
+sel_beh_r <- read.xlsx("../data/metabo/v2_012020/recip/perm_val_beh_TNT_90_thresh.xlsx")
+tmp_d <- readRDS("../data/metabo_national/v2_012020/donors/pctgs_sel_ft_donors_TNT_90.RDS") 
+sel_beh_d <- read.xlsx("../data/metabo/v2_012020/donors/perm_val_beh_TNT_90_thresh.xlsx")
+
+couple_info_D <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^D", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_R <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^R", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_tmp <- couple_info_D %>% 
+  mutate(recip_names = couple_info_R$Id.Cryostem.R) %>% 
+  mutate(METABONAME = gsub(" ", "_", METABONAME))
+
+tmp_d <- tmp_d %>%  
+  rownames_to_column("METABONAME") %>% 
+  inner_join(couple_info_tmp, by = "METABONAME") %>% 
+  select(recip_names, sel_beh_d$features)
+
+colnames(tmp_d)[1] <- "Id.Cryostem.R"
+
+couple_info_tmp <- couple_info_R %>% 
+  mutate(recip_names = couple_info_R$Id.Cryostem.R) %>% 
+  mutate(METABONAME = gsub(" ", "_", METABONAME))
+
+tmp_r <- tmp_r %>%
+  rownames_to_column("METABONAME") %>% 
+  inner_join(couple_info_tmp, by = "METABONAME") %>% 
+  select(recip_names, sel_beh_r$features)
+
+colnames(tmp_r)[1] <- "Id.Cryostem.R"
+
+colnames(tmp_r)[-c(1)] <- paste0("met_R_", colnames(tmp_r)[-c(1)])
+colnames(tmp_d)[-c(1)] <- paste0("met_D_", colnames(tmp_d)[-c(1)])
+  
+ft_rdr_metabo <- tmp_r %>% 
+  inner_join(tmp_d, by = c("Id.Cryostem.R"))
+```
+
+- Transcriptomics features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+bla <- load("../data/RNA_seq_national/recip_only/rna_recip_cryo_TNT_90.RData")
+sel_beh_r <- read.xlsx("../data/RNAseq/recip_only/perm_val_beh_TNT_90_thresh.xlsx")
+bla <- load("../data/RNA_seq_national/donors_only/rna_donor_cryo_TNT_90.RData")
+sel_beh_d <- read.xlsx("../data/RNAseq/donors_only/perm_val_beh_TNT_90_thresh.xlsx")
+
+couple_info_D <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^D", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_R <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^R", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_tmp <- couple_info_D %>% 
+  mutate(recip_names = couple_info_R$Id.Cryostem.R)
+
+tmp_r <- rna_recip_cryo_TNT_90 %>% 
+  select(sel_beh_r$sel_beh) %>% 
+  rownames_to_column("Id.Cryostem.R") 
+
+tmp_d <- rna_donor_cryo_TNT_90 %>%  
+  rownames_to_column("Id.Cryostem.R") %>% 
+  inner_join(couple_info_tmp, by = "Id.Cryostem.R") %>% 
+  select(recip_names, sel_beh_d$sel_beh)
+
+colnames(tmp_d)[1] <- "Id.Cryostem.R"
+
+colnames(tmp_r)[-c(1)] <- paste0("rna_R_", colnames(tmp_r)[-c(1)])
+colnames(tmp_d)[-c(1)] <- paste0("rna_D_", colnames(tmp_d)[-c(1)])
+  
+ft_rdr_transcripto <- tmp_r %>% 
+  inner_join(tmp_d, by = c("Id.Cryostem.R"))
+```
+
+I merge all features together:
+
+```{r, echo = FALSE}
+ft_integ <- ft_rdr_cyto %>% 
+  inner_join(ft_rdr_metabo, by = c("Id.Cryostem.R")) %>% 
+  inner_join(ft_rdr_transcripto, by = c("Id.Cryostem.R")) 
+print(paste0("We have information on the CyTOF, metabolomics and transcriptomics data for ",
+             nrow(ft_integ), " patients in the Cryostem cohort."))
+```
+
+#### Principal component analysis
+
+In the St Louis cohort, we were able to identify a nice separation between 
+the tolerant and non tolerant recipients when integrating the features that we 
+found of interest in the CyTOF, metabolomics and transcriptomics data.
+
+To see if these observations can be confirmed, we will now map the recipients
+of the Cryostem cohort in the PCA space that was defined by the recipients of 
+the St Louis cohort.
+```{r, echo = FALSE}
+mat4pca <- ft_integ %>% 
+  dplyr::select(-Id.Cryostem.R) %>%  
+  apply(2, scale) %>% 
+  as.matrix() 
+rownames(mat4pca) <- ft_integ$Id.Cryostem.R
+
+mat_withinfo <- left_join(ft_integ, 
+                          couple_info %>% mutate(Id.Cryostem.R = CyTOF.Name), 
+                          by = "Id.Cryostem.R")
+mat_withinfo[which(is.na(mat_withinfo$GROUP)),"GROUP"] <- "Secondary_tolerant"
+
+pca_louis <- readRDS("../data/integ/pca_TNT_st_louis_recip_donors.RDS")
+
+cryo_tmp <- apply(mat4pca, 2, scale)
+new_coords <- scale(cryo_tmp, pca_louis$pca$center, pca_louis$pca$scale) %*% pca_louis$pca$rotation 
+
+plot_cryo <- mat_withinfo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = new_coords[,1],
+         PC4 = new_coords[,4],
+         group = tolower(GROUP))
+plot_cryo$group[which(plot_cryo$group != "non_tolerant")] <- "tolerant"
+plot_cryo$group <- as.factor(plot_cryo$group)
+plot_cryo <- plot_cryo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, group, age_recip, CMVStatus,
+                PC1, PC4)
+
+plot_louis <- pca_louis$pca_2plot %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, group, age_recip, CMVStatus,
+                PC1, PC4) 
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo)))) 
+
+ggplot(all_2plot, aes(x= PC1, y= PC4, col= group, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("red", "blue")) +
+  theme_minimal() +
+  ggtitle("Separation of tolerant vs non tolerant recipients")
+```
+
+#### Correlations between features
+
+I save the tables corresponding to the features from recipients and donors in
+the cryostem cohort, to be able to generate correlation plots in the St Louis
+markdown.
+
+```{r, echo = FALSE}
+dim(ft_integ)
+saveRDS(lst(ft_integ, mat_withinfo), file = "../data/integ_national/data_for_correlation.RDS")
+```
+
+
+### Primary tolerant versus secondary tolerant recipients + donors
+
+Since looking at differences between the three groups consisting of primary, 
+secondary and non tolerant patients at the same time wasn't feasible, we divided
+our problem in two distinct sub-problems. We now focus on the features that
+seemed to play a role when trying to disinguish primary tolerant from secondary 
+tolerant recipients using features extracted from recipients and donors.
+
+I extract informations on the recipients group, age, gender, ... to be able to 
+use this information later on.
+
+```{r, echo = FALSE}
+samp_rd <- read.xlsx("~/Documents/VIB/Projects/Integrative_Paris/National_cohort/Data synthesis national cohort Cryostem 15042019_FINAL_filtered.xlsx")
+samp_rd$DOB <- as.Date(samp_rd$DOB, format = "%d.%m.%Y")
+samp_rd$DOG <- as.Date(samp_rd$DOG, format = "%d.%m.%Y")
+samp_rd$DATEOFSAMPLE <- as.Date(samp_rd$DATEOFSAMPLE, format = "%d.%m.%Y")
+# samp_rd <- samp_rd %>% 
+#   dplyr::filter(!is.na(METABONAME)) %>%  
+#   dplyr::filter(!is.na(FCSNAME)) 
+complete_couples <- samp_rd$COUPLENUMBER[which(duplicated(samp_rd$COUPLENUMBER))]
+
+couple_info <- samp_rd %>% 
+  dplyr::filter(COUPLENUMBER %in% complete_couples) %>% 
+  arrange(COUPLENUMBER) %>% 
+  mutate(group = as.factor(tolower(GROUP))) %>% 
+  column_to_rownames("X3")
+  
+gender_donors <- couple_info$Gender[c(TRUE,FALSE)]
+gender_recip <- couple_info$Gender[c(FALSE,TRUE)]
+gender_comp <- paste0(gender_donors, gender_recip)
+
+age_recip <- couple_info$DOG[c(FALSE,TRUE)] - couple_info$DOB[c(FALSE,TRUE)]
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_donors <- couple_info$CMVStatus[c(FALSE,TRUE)],
+       cmv_donors <- couple_info$CMVStatus[c(TRUE,FALSE)])
+
+ifelse(grepl("R", rownames(couple_info)[1]), 
+       cmv_recip <- couple_info$CMVStatus[c(TRUE,FALSE)],
+       cmv_recip <- couple_info$CMVStatus[c(FALSE,TRUE)])
+
+cmv_comp <- paste0(cmv_donors, cmv_recip)
+
+couple_info <- couple_info %>% 
+  rownames_to_column("rownames") %>% 
+  mutate(gender_comp = rep(gender_comp, each = 2),
+         age_recip = rep(age_recip, each = 2),
+         cmv_comp = rep(cmv_comp, each = 2)) %>% 
+  column_to_rownames("rownames")
+
+head(couple_info[,c(5, 11,15, 56:59)])
+```
+
+We then need to gather the features that were extracted from the three data
+sources:
+
+- CyTOF features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+tmp_r <- readRDS("../data/cyto_national/log2/recip/pctgs_sel_ft_recip_PTST_90.RDS")
+sel_beh_r <- read.xlsx("../data/cyto_national/log2/recip/perm_val_beh_PTST_90_thresh.xlsx")
+tmp_d <- readRDS("../data/cyto_national/log2/donors/pctgs_sel_ft_donors_PTST_90.RDS") 
+sel_beh_d <- read.xlsx("../data/cyto_national/log2/donors/perm_val_beh_PTST_90_thresh.xlsx")
+
+couple_info_D <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^D", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_R <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^R", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_tmp <- couple_info_D %>% 
+  mutate(recip_names = couple_info_R$Id.Cryostem.R)
+
+tmp_r <- tmp_r %>% 
+  select(sel_beh_r$features) %>% 
+  rownames_to_column("Id.Cryostem.R") 
+
+tmp_d <- tmp_d %>%  
+  rownames_to_column("Id.Cryostem.R") %>% 
+  inner_join(couple_info_tmp, by = "Id.Cryostem.R") %>% 
+  select(recip_names, sel_beh_d$features)
+
+colnames(tmp_d)[1] <- "Id.Cryostem.R"
+
+colnames(tmp_r)[-c(1)] <- paste0("cyt_R_", colnames(tmp_r)[-c(1)])
+colnames(tmp_d)[-c(1)] <- paste0("cyt_D_", colnames(tmp_d)[-c(1)])
+  
+ft_rdr_cyto <- tmp_r %>% 
+  inner_join(tmp_d, by = c("Id.Cryostem.R"))
+
+```
+
+- Metabolomics features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+tmp_r <- readRDS("../data/metabo_national/v2_012020/recip/pctgs_sel_ft_recip_PTST_90.RDS")
+sel_beh_r <- read.xlsx("../data/metabo/v2_012020/recip/perm_val_beh_PTST_90_thresh.xlsx")
+tmp_d <- readRDS("../data/metabo_national/v2_012020/donors/pctgs_sel_ft_donors_PTST_90.RDS") 
+sel_beh_d <- read.xlsx("../data/metabo/v2_012020/donors/perm_val_beh_PTST_90_thresh.xlsx")
+
+couple_info_D <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^D", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_R <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^R", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_tmp <- couple_info_D %>% 
+  mutate(recip_names = couple_info_R$Id.Cryostem.R) %>% 
+  mutate(METABONAME = gsub(" ", "_", METABONAME))
+
+tmp_d <- tmp_d %>%  
+  rownames_to_column("METABONAME") %>% 
+  inner_join(couple_info_tmp, by = "METABONAME") %>% 
+  select(recip_names, sel_beh_d$features)
+
+colnames(tmp_d)[1] <- "Id.Cryostem.R"
+
+couple_info_tmp <- couple_info_R %>% 
+  mutate(recip_names = couple_info_R$Id.Cryostem.R) %>% 
+  mutate(METABONAME = gsub(" ", "_", METABONAME))
+
+tmp_r <- tmp_r %>%
+  rownames_to_column("METABONAME") %>% 
+  inner_join(couple_info_tmp, by = "METABONAME") %>% 
+  select(recip_names, sel_beh_r$features)
+
+colnames(tmp_r)[1] <- "Id.Cryostem.R"
+
+colnames(tmp_r)[-c(1)] <- paste0("met_R_", colnames(tmp_r)[-c(1)])
+colnames(tmp_d)[-c(1)] <- paste0("met_D_", colnames(tmp_d)[-c(1)])
+  
+ft_rdr_metabo <- tmp_r %>% 
+  inner_join(tmp_d, by = c("Id.Cryostem.R"))
+```
+
+- Transcriptomics features that were selected in both the St Louis and the Cryostem cohort, 
+  with a threshold of 0.90. These features had the same behaviour in both cohorts.
+
+```{r, echo = FALSE}
+bla <- load("../data/RNA_seq_national/recip_only/rna_recip_cryo_PS_90.RData")
+sel_beh_r <- read.xlsx("../data/RNAseq/recip_only/perm_val_beh_PS_90_thresh.xlsx")
+rna_donor_cryo_PTST_90 <- readRDS("../data/RNA_seq_national/donors_only/rna_donor_cryo_PS_90.RDS")
+sel_beh_d <- read.xlsx("../data/RNAseq/donors_only/perm_val_beh_PS_90_thresh.xlsx")
+
+couple_info_D <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^D", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_R <- couple_info %>% 
+  rownames_to_column("Id.Cryostem.R") %>% 
+  filter(grepl("^R", Id.Cryostem.R)) %>% 
+  arrange(COUPLENUMBER)
+
+couple_info_tmp <- couple_info_D %>% 
+  mutate(recip_names = couple_info_R$Id.Cryostem.R)
+
+tmp_r <- rna_recip_cryo_PS_90 %>% 
+  select(sel_beh_r$sel_beh) %>% 
+  rownames_to_column("Id.Cryostem.R") 
+
+tmp_d <- rna_donor_cryo_PTST_90 %>%  
+  rownames_to_column("Id.Cryostem.R") %>% 
+  inner_join(couple_info_tmp, by = "Id.Cryostem.R") %>% 
+  select(recip_names, sel_beh_d$sel_beh)
+
+colnames(tmp_d)[1] <- "Id.Cryostem.R"
+
+colnames(tmp_r)[-c(1)] <- paste0("rna_R_", colnames(tmp_r)[-c(1)])
+colnames(tmp_d)[-c(1)] <- paste0("rna_D_", colnames(tmp_d)[-c(1)])
+  
+ft_rdr_transcripto <- tmp_r %>% 
+  inner_join(tmp_d, by = c("Id.Cryostem.R"))
+```
+
+I merge all features together:
+
+```{r, echo = FALSE}
+ft_integ <- ft_rdr_cyto %>% 
+  inner_join(ft_rdr_metabo, by = c("Id.Cryostem.R")) %>% 
+  inner_join(ft_rdr_transcripto, by = c("Id.Cryostem.R")) 
+print(paste0("We have information on the CyTOF, metabolomics and transcriptomics data for ",
+             nrow(ft_integ), " patients in the Cryostem cohort."))
+```
+
+#### Principal component analysis
+
+In the St Louis cohort, we were able to identify a nice separation between 
+the tolerant and non tolerant recipients when integrating the features that we 
+found of interest in the CyTOF, metabolomics and transcriptomics data.
+
+To see if these observations can be confirmed, we will now map the recipients
+of the Cryostem cohort in the PCA space that was defined by the recipients of 
+the St Louis cohort.
+```{r, echo = FALSE}
+mat4pca <- ft_integ %>% 
+  dplyr::select(-Id.Cryostem.R) %>%  
+  apply(2, scale) %>% 
+  as.matrix() 
+rownames(mat4pca) <- ft_integ$Id.Cryostem.R
+
+mat_withinfo <- left_join(ft_integ, 
+                          couple_info %>% mutate(Id.Cryostem.R = CyTOF.Name), 
+                          by = "Id.Cryostem.R")
+mat_withinfo[which(is.na(mat_withinfo$GROUP)),"GROUP"] <- "Secondary_tolerant"
+
+pca_louis <- readRDS("../data/integ/pca_PTST_st_louis_recip_donors.RDS")
+
+cryo_tmp <- apply(mat4pca, 2, scale)
+new_coords <- scale(cryo_tmp, pca_louis$pca$center, pca_louis$pca$scale) %*% pca_louis$pca$rotation 
+
+plot_cryo <- mat_withinfo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, GROUP, age_recip, CMVStatus) %>% 
+  mutate(PC1 = new_coords[,1],
+         PC2 = new_coords[,2],
+         group = tolower(GROUP))
+#plot_cryo$group[which(plot_cryo$group != "non_tolerant")] <- "tolerant"
+plot_cryo$group <- as.factor(plot_cryo$group)
+plot_cryo <- plot_cryo %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, group, age_recip, CMVStatus,
+                PC1, PC2)
+
+plot_louis <- pca_louis$pca_2plot %>% 
+  dplyr::select(METABONAME, Id.Cryostem.R, group, age_recip, CMVStatus,
+                PC1, PC2) 
+
+all_2plot <- rbind(plot_louis %>% 
+                     mutate(cohort = rep("St_Louis", nrow(plot_louis))),
+                   plot_cryo %>% 
+                     mutate(cohort = rep("Cryostem", nrow(plot_cryo)))) 
+
+ggplot(all_2plot, aes(x= PC1, y= PC2, col= group, label = Id.Cryostem.R)) + 
+  geom_point(aes(shape = cohort, size = cohort)) +
+  geom_text(aes(label=Id.Cryostem.R),hjust=-0.2, vjust=-0.2) +
+  scale_color_manual(values = c("green", "blue")) +
+  theme_minimal() +
+  ggtitle("Separation of primary vs secondary tolerant recipients")
+```
+
+#### Correlations between features
+
+I save the tables corresponding to the features from recipients and donors in
+the cryostem cohort, to be able to generate correlation plots in the St Louis
+markdown.
+
+```{r, echo = FALSE}
+dim(ft_integ)
+saveRDS(lst(ft_integ, mat_withinfo), file = "../data/integ_national/data_for_correlation_R_D_PTST.RDS")
+```
